@@ -1,8 +1,7 @@
-
 import streamlit as st
 import json
 
-st.title("🎭 Seat Cleaner for District 2 (or any section)")
+st.title("🎭 Seat Cleaner")
 
 uploaded_file = st.file_uploader("Upload your seatmap JSON file", type="json")
 
