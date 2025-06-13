@@ -12,9 +12,9 @@ num_rules = st.number_input("How many rules do you want to define?", min_value=1
 rules = []
 for i in range(num_rules):
     with st.expander(f"Rule {i+1}"):
-        section_name = st.text_input(f"Section name for Rule {i+1}", value="District 2", key=f"section_{i}")
+        section_name = st.text_input(f"Section name for Rule {i+1}", value="Stalls", key=f"section_{i}")
         row_letters = st.multiselect(f"Rows for Rule {i+1}", options=list("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), default=["F", "G", "H"], key=f"rows_{i}")
-        seat_limit = st.number_input(f"Remove seats up to number for Rule {i+1}", min_value=1, max_value=200, value=77, key=f"limit_{i}")
+        seat_limit = st.number_input(f"Remove seats up to number for Rule {i+1}", min_value=1, max_value=250, value=77, key=f"limit_{i}")
         rules.append({"section": section_name, "rows": row_letters, "limit": seat_limit})
 
 if uploaded_file:
