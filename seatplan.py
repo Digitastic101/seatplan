@@ -100,8 +100,8 @@ st.title("🎭 Add Rows to Seatmap")
 uploaded_file = st.file_uploader("Upload your seatmap JSON", type="json")
 
 # --- reference row / seat ---
-ref_row_letter = st.text_input("Reference row letter (e.g. 'B' – or '0' for section start)", value="B")
-ref_seat_number = st.text_input("Seat number in that row (e.g. '17')", value="17")
+ref_row_letter = st.text_input("Reference row letter (e.g. 'B' – or '0' for section start)", value="A")
+ref_seat_number = st.text_input("Seat number in that row (e.g. '17')", value="1")
 
 section_id = None
 seatmap     = None
