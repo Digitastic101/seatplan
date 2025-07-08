@@ -1,58 +1,104 @@
-import streamlit as st
 import json
+import uuid
+from typing import List, Dict
 
-st.title("🎭 Seat Cleaner")
+def insert_rows(
+    seatmap: Dict,
+    *,
+    section_name: str,
+    ref_row_index: str,
+    new_rows: List[Dict[str, List[int]]],
+    position: str = "above",
+    default_price: str = "85"
+) -> Dict:
+    """
+    Insert rows into a seatmap dictionary.
 
-uploaded_file = st.file_uploader("Upload your seatmap JSON file", type="json")
+    Args:
+        seatmap (dict): The seatmap JSON structure (already loaded).
+        section_name (str): e.g. "Stalls" — name of section to modify.
+        ref_row_index (str): Row index (e.g. 'L') where new rows will be inserted relative to.
+        new_rows (list): List of row specs, e.g. [{"index": "M", "numbers": [16,17,18,19]}]
+        position (str): "above" or "below" — position relative to ref_row_index.
+        default_price (str): Price to assign to all new seats.
 
-st.markdown("### 🎯 Seat Removal Rules")
+    Returns:
+        dict: A new seatmap dict with added rows.
+    """
 
-num_rules = st.number_input("How many rules do you want to define?", min_value=1, max_value=10, value=1)
+    # Locate the correct section by name
+    section_id, section = next(
+        (sid, sdata) for sid, sdata in seatmap.items()
+        if sdata.get("section_name") == section_name and "rows" in sdata
+    )
 
-rules = []
-for i in range(num_rules):
-    with st.expander(f"Rule {i+1}"):
-        section_name = st.text_input(f"Section name for Rule {i+1}", value="Stalls", key=f"section_{i}")
-        row_letters = st.multiselect(f"Rows for Rule {i+1}", options=list("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), default=["F", "G", "H"], key=f"rows_{i}")
-        seat_limit = st.number_input(f"Remove seats up to number for Rule {i+1}", min_value=1, max_value=250, value=10, key=f"limit_{i}")
-        rules.append({"section": section_name, "rows": row_letters, "limit": seat_limit})
+    rows_items = list(section["rows"].items())
+    new_rows_dict = {}
 
-if uploaded_file:
-    seatmap = json.load(uploaded_file)
-    removed_seats = []
+    for spec in new_rows:
+        row_letter = spec["index"]
+        seat_numbers = spec["numbers"]
+        row_id = f"r{uuid.uuid4().hex[:6]}"
 
-    for rule in rules:
-        section_name = rule["section"]
-        row_letters = rule["rows"]
-        seat_limit = rule["limit"]
+        seats = {}
+        for num in seat_numbers:
+            seat_id = f"s{uuid.uuid4().hex[:6]}"
+            seats[seat_id] = {
+                "id": seat_id,
+                "number": f"{row_letter}{num}",
+                "price": default_price,
+                "status": "av",
+                "handicap": "no",
+            }
 
-        for section_id, section_data in seatmap.items():
-            if section_data.get("section_name") == section_name and "rows" in section_data:
-                for row_id, row_data in section_data["rows"].items():
-                    if row_data.get("row_index") in row_letters:
-                        seats = row_data.get("seats", {})
-                        new_seats = {}
-                        for sid, seat in seats.items():
-                            try:
-                                number = int(''.join(filter(str.isdigit, seat["number"])))
-                                if number <= seat_limit:
-                                    removed_seats.append({
-                                        "section": section_name,
-                                        "row": row_data.get("row_index"),
-                                        "seat_number": seat["number"],
-                                        "seat_id": sid
-                                    })
-                                    continue
-                            except ValueError:
-                                pass
-                            new_seats[sid] = seat
+        new_rows_dict[row_id] = {
+            "seats": seats,
+            "row_index": row_letter,
+            "row_price": default_price,
+            "row_id": row_id,
+        }
 
-                        row_data["seats"] = new_seats
+    updated_rows = {}
+    inserted = False
 
-    if removed_seats:
-        st.success(f"Removed {len(removed_seats)} seats.")
-        st.dataframe(removed_seats)
-        cleaned_json = json.dumps(seatmap, indent=2)
-        st.download_button("Download cleaned JSON", cleaned_json, file_name="cleaned_seatmap.json")
-    else:
-        st.info("No seats matched the removal rules.")
+    for rid, rdata in rows_items:
+        if not inserted and rdata["row_index"] == ref_row_index:
+            if position == "above":
+                updated_rows.update(new_rows_dict)
+            updated_rows[rid] = rdata
+            if position == "below":
+                updated_rows.update(new_rows_dict)
+            inserted = True
+        else:
+            updated_rows[rid] = rdata
+
+    if not inserted:
+        updated_rows.update(new_rows_dict)
+
+    new_seatmap = seatmap.copy()
+    new_section = section.copy()
+    new_section["rows"] = updated_rows
+    new_seatmap[section_id] = new_section
+    return new_seatmap
+
+
+# === Example usage ===
+if __name__ == "__main__":
+    with open("seatmap_data.json") as f:
+        seatmap_data = json.load(f)
+
+    updated_map = insert_rows(
+        seatmap_data,
+        section_name="Stalls",
+        ref_row_index="L",
+        position="above",
+        new_rows=[
+            {"index": "M", "numbers": [16, 17, 18, 19]},
+            {"index": "N", "numbers": [20, 21]}
+        ]
+    )
+
+    with open("seatmap_updated.json", "w") as f:
+        json.dump(updated_map, f, indent=2)
+
+    print("✅ Rows inserted successfully.")
