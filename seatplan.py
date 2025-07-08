@@ -140,3 +140,4 @@ if uploaded_file and section_id and new_rows:
             st.download_button("Download updated JSON", updated_json, file_name="seatmap_updated.json")
         except Exception as e:
             st.error(f"❌ Error: {e}")
+
