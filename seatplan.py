@@ -66,6 +66,8 @@ def insert_rows(
 # === Streamlit App ===
 st.title("🎭 Add Rows to Seatmap")
 
+uploaded_file = st.file_uploader("Upload your seatmap JSON", type="json")
+
 # Always show inputs
 ref_row_letter = st.text_input("Reference row letter (e.g. 'B')", value="B")
 ref_seat_number = st.text_input("Seat number in that row (e.g. '17')", value="17")
@@ -85,8 +87,6 @@ for i in range(num_rows):
             new_rows.append({"index": letter.upper(), "numbers": number_list})
         except ValueError:
             st.error(f"Invalid seat numbers for row {letter}.")
-
-uploaded_file = st.file_uploader("Upload your seatmap JSON", type="json")
 
 if uploaded_file:
     seatmap = json.load(uploaded_file)
