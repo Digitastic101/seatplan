@@ -71,23 +71,9 @@ uploaded_file = st.file_uploader("Upload your seatmap JSON", type="json")
 # Always show inputs
 ref_row_letter = st.text_input("Reference row letter (e.g. 'B')", value="B")
 ref_seat_number = st.text_input("Seat number in that row (e.g. '17')", value="17")
-position = st.radio("Insert rows", options=["above", "below"])
-num_rows = st.number_input("How many new rows to add?", min_value=1, max_value=10, value=1)
 
-new_rows = []
-for i in range(num_rows):
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        letter = st.text_input(f"Row letter #{i+1}", key=f"letter_{i}")
-    with col2:
-        start_num = st.number_input(f"First seat number", min_value=1, max_value=500, value=16, key=f"start_{i}")
-    with col3:
-        end_num = st.number_input(f"Last seat number", min_value=1, max_value=500, value=29, key=f"end_{i}")
-
-    if letter and start_num <= end_num:
-        seat_range = list(range(start_num, end_num + 1))
-        new_rows.append({"index": letter.upper(), "numbers": seat_range})
-
+section_id = None
+seatmap = None
 if uploaded_file:
     seatmap = json.load(uploaded_file)
 
@@ -122,17 +108,35 @@ if uploaded_file:
         if row_summaries:
             st.markdown("**Rows in this section:** " + ", ".join(sorted(row_summaries)))
 
-        if st.button("➕ Insert Rows") and new_rows:
-            try:
-                updated_map = insert_rows(
-                    seatmap,
-                    section_id=section_id,
-                    ref_row_index=ref_row_letter.upper(),
-                    new_rows=new_rows,
-                    position=position
-                )
-                updated_json = json.dumps(updated_map, indent=2)
-                st.success("✅ Rows added successfully!")
-                st.download_button("Download updated JSON", updated_json, file_name="seatmap_updated.json")
-            except Exception as e:
-                st.error(f"❌ Error: {e}")
+position = st.radio("Insert rows", options=["above", "below"])
+num_rows = st.number_input("How many new rows to add?", min_value=1, max_value=10, value=1)
+
+new_rows = []
+for i in range(num_rows):
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        letter = st.text_input(f"Row letter #{i+1}", key=f"letter_{i}")
+    with col2:
+        start_num = st.number_input(f"First seat number", min_value=1, max_value=500, value=1, key=f"start_{i}", placeholder="1")
+    with col3:
+        end_num = st.number_input(f"Last seat number", min_value=1, max_value=500, value=1, key=f"end_{i}", placeholder="1")
+
+    if letter and start_num <= end_num:
+        seat_range = list(range(start_num, end_num + 1))
+        new_rows.append({"index": letter.upper(), "numbers": seat_range})
+
+if uploaded_file and section_id and new_rows:
+    if st.button("➕ Insert Rows"):
+        try:
+            updated_map = insert_rows(
+                seatmap,
+                section_id=section_id,
+                ref_row_index=ref_row_letter.upper(),
+                new_rows=new_rows,
+                position=position
+            )
+            updated_json = json.dumps(updated_map, indent=2)
+            st.success("✅ Rows added successfully!")
+            st.download_button("Download updated JSON", updated_json, file_name="seatmap_updated.json")
+        except Exception as e:
+            st.error(f"❌ Error: {e}")
