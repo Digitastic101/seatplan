@@ -76,17 +76,17 @@ num_rows = st.number_input("How many new rows to add?", min_value=1, max_value=1
 
 new_rows = []
 for i in range(num_rows):
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         letter = st.text_input(f"Row letter #{i+1}", key=f"letter_{i}")
     with col2:
-        nums = st.text_input(f"Seat numbers (comma separated)", key=f"nums_{i}")
-    if letter and nums:
-        try:
-            number_list = [int(n.strip()) for n in nums.split(",") if n.strip()]
-            new_rows.append({"index": letter.upper(), "numbers": number_list})
-        except ValueError:
-            st.error(f"Invalid seat numbers for row {letter}.")
+        start_num = st.number_input(f"First seat number", min_value=1, max_value=500, value=16, key=f"start_{i}")
+    with col3:
+        end_num = st.number_input(f"Last seat number", min_value=1, max_value=500, value=29, key=f"end_{i}")
+
+    if letter and start_num <= end_num:
+        seat_range = list(range(start_num, end_num + 1))
+        new_rows.append({"index": letter.upper(), "numbers": seat_range})
 
 if uploaded_file:
     seatmap = json.load(uploaded_file)
