@@ -18,21 +18,16 @@ def insert_rows(
     position: str = "above",
     default_price: str = "85"
 ) -> Dict:
-    """Return a copy of *seatmap* with *new_rows* inserted.
-
-    new_rows MUST be ordered from nearest‑to‑reference → furthest‑away.
-    """
     section = seatmap[section_id]
-    rows_items = list(section["rows"].items())  # preserves original order
+    rows_items = list(section["rows"].items())
 
-    # Build (row_id, row_dict) pairs in the order we want them injected
     ordered_pairs = []
     source_iter = new_rows if position == "below" else reversed(new_rows)
 
     for spec in source_iter:
-        row_letter   = spec["index"].upper()
-        seat_labels  = spec["labels"]
-        row_id       = f"r{uuid.uuid4().hex[:6]}"
+        row_letter = spec["index"].upper()
+        seat_labels = spec["labels"]
+        row_id = f"r{uuid.uuid4().hex[:6]}"
 
         seats = {}
         for label in seat_labels:
@@ -60,14 +55,11 @@ def insert_rows(
 
     for rid, rdata in rows_items:
         if not inserted and (ref_row_index == "0" or rdata["row_index"].upper() == ref_row_index.upper()):
-            # Insert ABOVE the reference
             if position == "above":
                 for pid, pdata in ordered_pairs:
                     updated_rows[pid] = pdata
-            # Always keep the reference row itself (unless "0" used)
             if ref_row_index != "0":
                 updated_rows[rid] = rdata
-            # Insert BELOW the reference
             if position == "below":
                 for pid, pdata in ordered_pairs:
                     updated_rows[pid] = pdata
@@ -75,7 +67,6 @@ def insert_rows(
         else:
             updated_rows[rid] = rdata
 
-    # If reference not located (or ref_row_index == "0"), insert at start/end
     if not inserted:
         if position == "above":
             for pid, pdata in ordered_pairs:
@@ -84,9 +75,8 @@ def insert_rows(
             for pid, pdata in ordered_pairs:
                 updated_rows[pid] = pdata
 
-    # Re‑assemble seatmap copy
     new_seatmap = seatmap.copy()
-    new_section        = section.copy()
+    new_section = section.copy()
     new_section["rows"] = updated_rows
     new_seatmap[section_id] = new_section
     return new_seatmap
@@ -99,16 +89,14 @@ st.title("🎭 Add Rows to Seatmap")
 
 uploaded_file = st.file_uploader("Upload your seatmap JSON", type="json")
 
-# --- reference row / seat ---
 ref_row_letter = st.text_input("Reference row letter (e.g. 'B' – or '0' for section start)", value="A")
 ref_seat_number = st.text_input("Seat number in that row (e.g. '17')", value="1")
 
 section_id = None
-seatmap     = None
+seatmap = None
 if uploaded_file:
     seatmap = json.load(uploaded_file)
 
-    # find candidate sections
     matched_rows = []
     for sid, sdata in seatmap.items():
         if "rows" not in sdata:
@@ -123,39 +111,46 @@ if uploaded_file:
         st.warning("No section matches that row/seat.")
     else:
         display_labels = [lbl for lbl, _ in matched_rows]
-        label_choice   = st.selectbox("Select section containing that seat:", display_labels)
-        section_id     = dict(matched_rows)[label_choice]
+        label_choice = st.selectbox("Select section containing that seat:", display_labels)
+        section_id = dict(matched_rows)[label_choice]
 
-        # show current rows
         rows_preview = []
         for r in seatmap[section_id]["rows"].values():
             letters = r["row_index"]
-            nums    = [int(s["number"][len(letters):]) for s in r["seats"].values() if s["number"][len(letters):].isdigit()]
+            nums = [int(s["number"][len(letters):]) for s in r["seats"].values() if s["number"][len(letters):].isdigit()]
             if nums:
                 rows_preview.append(f"{letters}{min(nums)}–{max(nums)}")
         st.markdown("**Rows in this section:** " + ", ".join(rows_preview))
 
-# --- insertion controls ---
 position = st.radio("Insert rows", ["above", "below"], horizontal=True)
 num_rows = st.number_input("How many new rows to add?", 1, 10, 1)
 
 new_rows = []
 for i in range(int(num_rows)):
     st.markdown(f"### Row #{i+1}")
-    col1, col2 = st.columns([1, 3])
+    col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
         letter = st.text_input(f"Row letter #{i+1}", key=f"row_letter_{i}")
     with col2:
-        manual_labels = st.text_input(
-            "Seat labels (comma-separated, e.g. E128, Ex128, E129)",
-            key=f"seat_labels_{i}"
-        )
+        first = st.number_input("First seat", 1, 999, 1, key=f"first_{i}")
+    with col3:
+        last = st.number_input("Last seat", 1, 999, 1, key=f"last_{i}")
 
-    if letter and manual_labels:
-        label_list = [s.strip() for s in manual_labels.split(",") if s.strip()]
-        new_rows.append({"index": letter.upper(), "labels": label_list})
+    anomaly_labels = []
+    if letter and first <= last:
+        seat_numbers = list(range(first, last + 1))
+        base_labels = [f"{letter.upper()}{n}" for n in seat_numbers]
 
-# --- action & download ---
+        # Allow anomaly insertion
+        if st.checkbox(f"Add anomaly between seats for Row #{i+1}?", key=f"anomaly_toggle_{i}"):
+            ano_between = st.number_input(f"Insert anomaly between seat number…", min_value=first, max_value=last - 1, key=f"ano_pos_{i}")
+            ano_label = st.text_input(f"Label for anomaly seat (e.g. Ex128)", key=f"ano_label_{i}")
+            if ano_label:
+                insertion_index = seat_numbers.index(ano_between) + 1
+                base_labels.insert(insertion_index, ano_label)
+
+        new_rows.append({"index": letter.upper(), "labels": base_labels})
+
 if uploaded_file and section_id and new_rows:
     if st.button("➕ Insert Rows"):
         try:
