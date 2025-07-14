@@ -1,7 +1,4 @@
-from pathlib import Path
 
-# The full updated Streamlit script with automatic ascending/descending seat number handling and dynamic price
-updated_code = '''
 import json
 import uuid
 from typing import List, Dict
@@ -194,11 +191,3 @@ if uploaded_file and section_id and new_rows:
 if "updated_map" in st.session_state:
     js = json.dumps(st.session_state["updated_map"], indent=2)
     st.download_button("📥 Download updated JSON", js, "seatmap_updated.json")
-'''
-
-# Save the updated code to a file
-output_path = Path("/mnt/data/seatmap_editor_updated.py")
-output_path.write_text(updated_code)
-
-output_path
-
