@@ -1,3 +1,7 @@
+from pathlib import Path
+
+# The full updated Streamlit script with automatic ascending/descending seat number handling and dynamic price
+updated_code = '''
 import json
 import uuid
 from typing import List, Dict
@@ -5,8 +9,6 @@ import streamlit as st
 
 # -------------------------------------------------
 # Core helper – inserts rows keeping the user order
-# If position == "above"  -> last item in new_rows ends up closest to ref_row
-# If position == "below"  -> first item in new_rows ends up closest to ref_row
 # -------------------------------------------------
 
 def insert_rows(
@@ -136,8 +138,13 @@ for i in range(int(num_rows)):
     with col3:
         last = st.number_input("Last seat", 1, 999, 1, key=f"last_{i}")
 
-    if letter and first <= last:
-        seat_numbers = list(range(first, last + 1))
+    if letter:
+        # Automatically determine order
+        if first <= last:
+            seat_numbers = list(range(first, last + 1))  # Ascending
+        else:
+            seat_numbers = list(range(first, last - 1, -1))  # Descending
+
         base_labels = [f"{letter.upper()}{n}" for n in seat_numbers]
 
         num_anomalies = st.number_input(f"How many anomalies in Row #{i+1}?", 0, 5, 0, key=f"num_ano_{i}")
@@ -147,8 +154,8 @@ for i in range(int(num_rows)):
             with col_a1:
                 ano_between = st.number_input(
                     f"Insert anomaly between... (#{j+1})",
-                    min_value=first,
-                    max_value=last - 1,
+                    min_value=min(first, last),
+                    max_value=max(first, last) - 1,
                     key=f"ano_pos_{i}_{j}"
                 )
             with col_a2:
@@ -169,12 +176,15 @@ for i in range(int(num_rows)):
 if uploaded_file and section_id and new_rows:
     if st.button("➕ Insert Rows"):
         try:
+            default_price = seatmap[section_id].get("price", "85")
+
             update = insert_rows(
                 seatmap,
                 section_id=section_id,
                 ref_row_index=ref_row_letter,
                 new_rows=new_rows,
-                position=position
+                position=position,
+                default_price=default_price
             )
             st.session_state["updated_map"] = update
             st.success("Rows inserted – download below 👇")
@@ -184,3 +194,11 @@ if uploaded_file and section_id and new_rows:
 if "updated_map" in st.session_state:
     js = json.dumps(st.session_state["updated_map"], indent=2)
     st.download_button("📥 Download updated JSON", js, "seatmap_updated.json")
+'''
+
+# Save the updated code to a file
+output_path = Path("/mnt/data/seatmap_editor_updated.py")
+output_path.write_text(updated_code)
+
+output_path
+
