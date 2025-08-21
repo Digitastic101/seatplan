@@ -1,4 +1,3 @@
-
 import json
 import uuid
 from typing import List, Dict
@@ -81,6 +80,56 @@ def insert_rows(
     return new_seatmap
 
 # -------------------------------------------------
+# NEW helper – relabel a row and its seat numbers
+# -------------------------------------------------
+
+def relabel_row(
+    seatmap: Dict,
+    *,
+    section_id: str,
+    target_row_letter: str,
+    new_prefix: str
+) -> Dict:
+    """
+    Updates the row_index from 'T' -> '(RV) T' (using new_prefix + original),
+    and for every seat in that row updates numbers from 'T12' -> '(RV) T12'.
+    Only rows whose row_index matches target_row_letter (case-insensitive) are changed.
+    """
+    target = target_row_letter.upper()
+    section = seatmap.get(section_id)
+    if not section or "rows" not in section:
+        return seatmap
+
+    new_seatmap = seatmap.copy()
+    new_section = section.copy()
+    new_rows = {}
+
+    for rid, rdata in section["rows"].items():
+        if str(rdata.get("row_index", "")).upper() == target:
+            new_label = f"{new_prefix}{target}"
+            # Update seats
+            new_seats = {}
+            for sid, sdata in rdata["seats"].items():
+                old = str(sdata.get("number", ""))
+                # If the seat label starts with the old row letters, replace that prefix
+                if old.upper().startswith(target):
+                    rest = old[len(target):]
+                    sdata = {**sdata, "number": f"{new_label}{rest}"}
+                new_seats[sid] = sdata
+            # Update row object
+            new_rows[rid] = {
+                **rdata,
+                "row_index": new_label,
+                "seats": new_seats,
+            }
+        else:
+            new_rows[rid] = rdata
+
+    new_section["rows"] = new_rows
+    new_seatmap[section_id] = new_section
+    return new_seatmap
+
+# -------------------------------------------------
 # Streamlit UI
 # -------------------------------------------------
 
@@ -116,10 +165,41 @@ if uploaded_file:
         rows_preview = []
         for r in seatmap[section_id]["rows"].values():
             letters = r["row_index"]
-            nums = [int(s["number"][len(letters):]) for s in r["seats"].values() if s["number"][len(letters):].isdigit()]
+            nums = [int(s["number"][len(letters):]) for s in r["seats"].values()
+                    if s["number"][len(letters):].isdigit()]
             if nums:
                 rows_preview.append(f"{letters}{min(nums)}–{max(nums)}")
         st.markdown("**Rows in this section:** " + ", ".join(rows_preview))
+
+        # ---------------------------------------------
+        # OPTIONAL: Relabel an existing row + seat tags
+        # ---------------------------------------------
+        with st.expander("Optional: Relabel an existing row (e.g. add '(RV) ' prefix)"):
+            col_a, col_b, col_c = st.columns([1, 2, 2])
+            with col_a:
+                target_row_letter = st.text_input("Row to change", value="T", help="Exact row letters to match")
+            with col_b:
+                new_prefix = st.text_input("Prefix to add", value="(RV) ", help="Will become '(RV) ' + Row (e.g. '(RV) T')")
+            with col_c:
+                preview_btn = st.button("Preview change")
+
+            if target_row_letter:
+                new_row_label_preview = f"{new_prefix}{target_row_letter.upper()}"
+                st.caption(f"Example → row '{target_row_letter.upper()}' → '{new_row_label_preview}', "
+                           f"seat 'T12' → '{new_row_label_preview}12'")
+
+            if st.button("Apply relabel now"):
+                try:
+                    updated = relabel_row(
+                        seatmap,
+                        section_id=section_id,
+                        target_row_letter=target_row_letter,
+                        new_prefix=new_prefix
+                    )
+                    st.session_state["updated_map"] = updated
+                    st.success(f"Relabelled row '{target_row_letter.upper()}' to '{new_prefix}{target_row_letter.upper()}'")
+                except Exception as e:
+                    st.error(str(e))
 
 position = st.radio("Insert rows", ["above", "below"], horizontal=True)
 num_rows = st.number_input("How many new rows to add?", 1, 10, 1)
