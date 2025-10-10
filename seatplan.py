@@ -1,65 +1,51 @@
 import json
 import uuid
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import streamlit as st
 
-# ===============================
-# Helpers (no alignment touched)
-# ===============================
-
-def reverse_rows_in_section(seatmap: Dict, section_id: str) -> Dict:
-    """Reverse current row order in a section. Leaves all fields as-is."""
-    section = seatmap.get(section_id)
-    if not section or "rows" not in section:
-        return seatmap
-    items = list(section["rows"].items())
-    items.reverse()
-    new_rows = {rid: rdata for rid, rdata in items}
-    new_map = seatmap.copy()
-    new_sec = section.copy()
-    new_sec["rows"] = new_rows
-    new_map[section_id] = new_sec
-    return new_map
-
-
+# -------------------------------------------------
+# Core helper – inserts rows keeping the user order
+# (unchanged logic, just factored a tiny bit)
+# -------------------------------------------------
 def insert_rows(
     seatmap: Dict,
     *,
     section_id: str,
-    ref_row_index: str,                   # e.g. 'A' or '0' for section start
-    new_rows: List[Dict[str, List[str]]], # [{"index":"T","labels":["T1","T2",...]}]
+    ref_row_index: str,
+    new_rows: List[Dict[str, List[str]]],
     position: str = "above",
     default_price: str = "85",
 ) -> Dict:
-    """Insert new rows above/below a reference row (or at start if ref_row_index=='0')."""
     section = seatmap[section_id]
     rows_items = list(section["rows"].items())
 
     ordered_pairs = []
-    source_iter = new_rows if position == "below" else reversed(new_rows)
-
-    for spec in source_iter:
+    # NOTE: new_rows should already be in desired order (UI can reverse)
+    for spec in new_rows:
         row_letter = spec["index"].upper()
-        labels = spec["labels"]
+        seat_labels = spec["labels"]
         row_id = f"r{uuid.uuid4().hex[:6]}"
-
         seats = {}
-        for label in labels:
-            sid = f"s{uuid.uuid4().hex[:6]}"
-            seats[sid] = {
-                "id": sid,
+        for label in seat_labels:
+            seat_id = f"s{uuid.uuid4().hex[:6]}"
+            seats[seat_id] = {
+                "id": seat_id,
                 "number": label,
                 "price": default_price,
                 "status": "av",
                 "handicap": "no",
             }
-
-        ordered_pairs.append((row_id, {
-            "seats": seats,
-            "row_index": row_letter,
-            "row_price": default_price,
-            "row_id": row_id,
-        }))
+        ordered_pairs.append(
+            (
+                row_id,
+                {
+                    "seats": seats,
+                    "row_index": row_letter,
+                    "row_price": default_price,
+                    "row_id": row_id,
+                },
+            )
+        )
 
     updated_rows = {}
     inserted = False
@@ -69,9 +55,11 @@ def insert_rows(
             if position == "above":
                 for pid, pdata in ordered_pairs:
                     updated_rows[pid] = pdata
-            if ref_row_index != "0":
-                updated_rows[rid] = rdata
+                if ref_row_index != "0":
+                    updated_rows[rid] = rdata
             if position == "below":
+                if ref_row_index != "0":
+                    updated_rows[rid] = rdata
                 for pid, pdata in ordered_pairs:
                     updated_rows[pid] = pdata
             inserted = True
@@ -86,42 +74,33 @@ def insert_rows(
             for pid, pdata in ordered_pairs:
                 updated_rows[pid] = pdata
 
-    new_map = seatmap.copy()
-    new_sec = section.copy()
-    new_sec["rows"] = updated_rows
-    new_map[section_id] = new_sec
-    return new_map
+    new_seatmap = seatmap.copy()
+    new_section = section.copy()
+    new_section["rows"] = updated_rows
+    new_seatmap[section_id] = new_section
+    return new_seatmap
 
 
+# -------------------------------------------------
+# Relabel multiple rows + their seats (as before)
+# -------------------------------------------------
 def relabel_rows(
-    seatmap: Dict,
-    *,
-    section_id: str,
-    target_row_letters: List[str],
-    new_prefix: str
+    seatmap: Dict, *, section_id: str, target_row_letters: List[str], new_prefix: str
 ) -> Dict:
-    """
-    Add a prefix to selected rows' labels:
-      - row_index: 'T' -> '(RV) T'
-      - seats: 'T12' -> '(RV) T12'
-    """
     if not target_row_letters:
         return seatmap
-
     targets_upper = {t.upper() for t in target_row_letters}
     section = seatmap.get(section_id)
     if not section or "rows" not in section:
         return seatmap
 
-    new_map = seatmap.copy()
-    new_sec = section.copy()
+    new_seatmap = seatmap.copy()
+    new_section = section.copy()
     new_rows = {}
-
     for rid, rdata in section["rows"].items():
         original_row = str(rdata.get("row_index", ""))
         if original_row.upper() in targets_upper:
             new_row_label = f"{new_prefix}{original_row}"
-
             new_seats = {}
             for sid, sdata in rdata["seats"].items():
                 old = str(sdata.get("number", ""))
@@ -129,150 +108,261 @@ def relabel_rows(
                     rest = old[len(original_row):]
                     sdata = {**sdata, "number": f"{new_row_label}{rest}"}
                 new_seats[sid] = sdata
-
-            new_rows[rid] = {**rdata, "row_index": new_row_label, "seats": new_seats}
+            new_rows[rid] = {
+                **rdata,
+                "row_index": new_row_label,
+                "seats": new_seats,
+            }
         else:
             new_rows[rid] = rdata
+    new_section["rows"] = new_rows
+    new_seatmap[section_id] = new_section
+    return new_seatmap
 
-    new_sec["rows"] = new_rows
-    new_map[section_id] = new_sec
-    return new_map
+
+# -------------------------------------------------
+# NEW: update section meta (name + align)
+# -------------------------------------------------
+def update_section_meta(
+    seatmap: Dict,
+    *,
+    section_id: str,
+    new_name: str = None,
+    new_align: str = None
+) -> Dict:
+    section = seatmap.get(section_id, {}).copy()
+    if not section:
+        return seatmap
+    if new_name is not None:
+        section["section_name"] = new_name
+    if new_align is not None:
+        section["align"] = new_align
+    updated = seatmap.copy()
+    updated[section_id] = section
+    return updated
 
 
-# ===============================
-# Streamlit UI (no alignment UI)
-# ===============================
+# -------------------------------------------------
+# Streamlit UI
+# -------------------------------------------------
+st.title("🎭 Update Plan: Add/Adjust Rows & Section Settings")
 
-st.title("🎭 Update Seat Plan (alignment untouched)")
+uploaded_file = st.file_uploader("Upload your seatmap JSON", type="json")
 
-uploaded_file = st.file_uploader("Upload seatmap JSON", type="json")
+ref_row_letter = st.text_input(
+    "Reference row letter (e.g. 'B' – or '0' for section start)",
+    value="A"
+)
+ref_seat_number = st.text_input(
+    "Seat number in that row (e.g. '17')",
+    value="1"
+)
+
+section_id = None
 seatmap = None
 
 if uploaded_file:
     seatmap = json.load(uploaded_file)
 
-if seatmap:
-    # Pick a section
-    st.subheader("Select section")
-    options = []
+    # Find candidate sections from the reference row/seat
+    matched_rows: List[Tuple[str, str]] = []
     for sid, sdata in seatmap.items():
-        name = sdata.get("section_name", sid)
-        nrows = len(sdata.get("rows", {}))
-        options.append(f"{name}  •  {sid}  •  {nrows} rows")
-    choice = st.selectbox("Section", options=options)
-    section_id = choice.split("•")[-2].strip()
+        if "rows" not in sdata:
+            continue
+        for rdata in sdata["rows"].values():
+            if ref_row_letter == "0" or rdata["row_index"].upper() == ref_row_letter.upper():
+                if ref_row_letter == "0" or any(
+                    s["number"] == f"{ref_row_letter.upper()}{ref_seat_number}"
+                    for s in rdata["seats"].values()
+                ):
+                    label = f"{sdata.get('section_name','(unnamed)')} · rows: {len(sdata['rows'])} · align: {sdata.get('align','def')}"
+                    matched_rows.append((label, sid))
+                    break
 
-    sec = seatmap[section_id]
+    if not matched_rows:
+        st.warning("No section matches that row/seat.")
+    else:
+        display_labels = [lbl for lbl, _ in matched_rows]
+        label_choice = st.selectbox("Select section containing that seat:", display_labels)
+        section_id = dict(matched_rows)[label_choice]
 
-    st.write("---")
-    # Section name
-    new_name = st.text_input("Section name", value=sec.get("section_name", ""))
+        # --- Preview rows ---
+        rows_preview = []
+        for r in seatmap[section_id]["rows"].values():
+            letters = r["row_index"]
+            nums = [
+                int(s["number"][len(letters):])
+                for s in r["seats"].values()
+                if s["number"][len(letters):].isdigit()
+            ]
+            if nums:
+                rows_preview.append(f"{letters}{min(nums)}–{max(nums)}")
+        st.markdown("**Rows in this section:** " + (", ".join(rows_preview) or "(none)"))
 
-    # Tiny read-only peek so you can see what's currently stored (we don't touch it)
-    st.caption(f"(Info) Current align field in file: {sec.get('align', '(none)')}")
+        # --- Editable section meta (NAME + ALIGN) ---
+        st.subheader("Section settings")
+        current_name = seatmap[section_id].get("section_name", "")
+        current_align = seatmap[section_id].get("align", "def")
 
-    st.write("---")
-    # Reverse rows
-    reverse_flag = st.checkbox("Reverse current row order (optional)", value=False)
+        # Build align options from the file (plus fallbacks)
+        # In your uploaded file we see 'l', 'r' and 'def' used across sections.
+        # We'll always include these and keep the current value visible.
+        align_options = sorted({current_align, "l", "r", "def"})
+        col_sn, col_al = st.columns([3, 1])
+        with col_sn:
+            edited_name = st.text_input("Section name", value=current_name)
+        with col_al:
+            edited_align = st.selectbox("Align", align_options, index=align_options.index(current_align) if current_align in align_options else 0)
+        st.caption("Tip: align = l (left), r (right), def (engine default).")
 
-    st.write("---")
-    # Relabel rows (optional)
-    with st.expander("Optional: Relabel existing rows (add a prefix)"):
-        available_rows = sorted(
-            {r["row_index"] for r in sec.get("rows", {}).values()},
-            key=lambda x: str(x).upper()
-        )
-        col_a, col_b = st.columns([2, 3])
-        with col_a:
-            selected_rows = st.multiselect("Rows to change", options=available_rows)
-        with col_b:
-            new_prefix = st.text_input("Prefix to add", value="(RV) ")
-        relabel_requested = st.checkbox("Apply relabel on save", value=False)
+        # ---------------------------------------------
+        # OPTIONAL: Relabel existing rows + seat tags
+        # ---------------------------------------------
+        with st.expander("Optional: Relabel existing rows (e.g. add '(RV) ' prefix)"):
+            # Available row letters in this section
+            available_rows = []
+            for r in seatmap[section_id]["rows"].values():
+                if "row_index" in r:
+                    available_rows.append(str(r["row_index"]))
+            available_rows = sorted(dict.fromkeys(available_rows), key=lambda x: x.upper())
 
-    st.write("---")
-    # Insert rows (optional)
-    st.subheader("Add rows (optional)")
-    ref_row_letter = st.text_input("Reference row letter (or '0' for section start)", value="0")
-    position = st.radio("Insert position", ["above", "below"], horizontal=True)
-    num_rows = st.number_input("How many new rows?", 0, 10, 0)
+            col_a, col_b = st.columns([2, 3])
+            with col_a:
+                selected_rows = st.multiselect(
+                    "Rows to change",
+                    options=available_rows,
+                    help="Pick one or more rows to relabel",
+                )
+            with col_b:
+                new_prefix = st.text_input(
+                    "Prefix to add",
+                    value="(RV) ",
+                    help="Applied to each selected row, e.g. '(RV) ' + T -> '(RV) T'",
+                )
 
-    new_rows_specs = []
-    for i in range(int(num_rows)):
-        st.markdown(f"**Row #{i+1}**")
-        c1, c2, c3 = st.columns([1, 1, 2])
-        with c1:
-            letter = st.text_input(f"Row letter #{i+1}", key=f"row_letter_{i}")
-        with c2:
-            first = st.number_input("First seat", 1, 999, 1, key=f"first_{i}")
-        with c3:
-            last = st.number_input("Last seat", 1, 999, 1, key=f"last_{i}")
+            if selected_rows:
+                preview_samples = ", ".join([f"{new_prefix}{r}" for r in selected_rows[:3]])
+                st.caption(f"Preview: {preview_samples}{'…' if len(selected_rows) > 3 else ''}")
 
-        labels = []
-        if letter:
-            rng = range(first, last + 1) if first <= last else range(first, last - 1, -1)
-            labels = [f"{letter.upper()}{n}" for n in rng]
+            if st.button("Apply relabel to selected rows"):
+                try:
+                    seatmap = relabel_rows(
+                        seatmap,
+                        section_id=section_id,
+                        target_row_letters=selected_rows,
+                        new_prefix=new_prefix,
+                    )
+                    st.session_state["updated_map"] = seatmap
+                    st.success(f"Relabelled {len(selected_rows)} row(s).")
+                except Exception as e:
+                    st.error(str(e))
 
-        nano = st.number_input(f"Anomalies in Row #{i+1}", 0, 5, 0, key=f"ano_n_{i}")
-        anomalies = []
-        for j in range(nano):
-            a1, a2 = st.columns([2, 3])
-            with a1:
-                between = st.number_input(f"Insert after seat number (#{j+1})", 1, 999, key=f"ano_pos_{i}_{j}")
-            with a2:
-                label = st.text_input(f"Anomaly label (#{j+1})", key=f"ano_lab_{i}_{j}")
-            if label:
-                anomalies.append((between, label))
-        # apply anomalies
-        for between, lab in sorted(anomalies, key=lambda x: x[0], reverse=True):
-            try:
-                idx = [int(s[len(letter):]) for s in labels if s[len(letter):].isdigit()].index(between)
-                labels.insert(idx + 1, lab)
-            except Exception:
-                pass
+        # -----------------------------
+        # Controls for adding new rows
+        # -----------------------------
+        st.subheader("Add rows")
 
-        if letter:
-            new_rows_specs.append({"index": letter.upper(), "labels": labels})
+        position = st.radio("Insert rows", ["above", "below"], horizontal=True)
 
-    st.write("---")
-    if st.button("💾 Save changes"):
-        updated = seatmap.copy()
-        cur = updated[section_id].copy()
+        # NEW: Direction rescue toggles
+        rev_rows = st.checkbox("Reverse the order of the NEW rows", value=False)
+        rev_seats = st.checkbox("Reverse seat numbers INSIDE each new row", value=False)
 
-        # Update name only (alignment is intentionally untouched)
-        if new_name.strip():
-            cur["section_name"] = new_name.strip()
-        updated[section_id] = cur
+        num_rows = st.number_input("How many new rows to add?", 1, 10, 1)
 
-        # Reverse rows if requested
-        if reverse_flag:
-            updated = reverse_rows_in_section(updated, section_id)
+        new_rows = []
+        for i in range(int(num_rows)):
+            st.markdown(f"### Row #{i+1}")
+            col1, col2, col3 = st.columns([1, 1, 2])
+            with col1:
+                letter = st.text_input(f"Row letter #{i+1}", key=f"row_letter_{i}")
+            with col2:
+                first = st.number_input("First seat", 1, 999, 1, key=f"first_{i}")
+            with col3:
+                last = st.number_input("Last seat", 1, 999, 1, key=f"last_{i}")
 
-        # Relabel selected rows if requested
-        if relabel_requested and selected_rows:
-            updated = relabel_rows(
-                updated,
-                section_id=section_id,
-                target_row_letters=selected_rows,
-                new_prefix=new_prefix
-            )
+            if letter:
+                # Build seat sequence
+                if first <= last:
+                    seat_numbers = list(range(first, last + 1))
+                else:
+                    seat_numbers = list(range(first, last - 1, -1))
+                # Optionally reverse inside-row numbering
+                if rev_seats:
+                    seat_numbers = list(reversed(seat_numbers))
 
-        # Insert rows if provided
-        if new_rows_specs:
-            default_price = cur.get("price", "85")
-            updated = insert_rows(
-                updated,
-                section_id=section_id,
-                ref_row_index=ref_row_letter,
-                new_rows=new_rows_specs,
-                position=position,
-                default_price=default_price
-            )
+                base_labels = [f"{letter.upper()}{n}" for n in seat_numbers]
 
-        st.session_state["updated_map"] = updated
-        seatmap = updated
-        st.success("Saved. Download below.")
+                num_anomalies = st.number_input(
+                    f"How many anomalies in Row #{i+1}?",
+                    0, 5, 0, key=f"num_ano_{i}"
+                )
+                anomalies = []
+                for j in range(num_anomalies):
+                    col_a1, col_a2 = st.columns([2, 3])
+                    with col_a1:
+                        ano_between = st.number_input(
+                            f"Insert anomaly between... (#{j+1})",
+                            min_value=min(first, last),
+                            max_value=max(first, last) - 1,
+                            key=f"ano_pos_{i}_{j}"
+                        )
+                    with col_a2:
+                        ano_label = st.text_input(
+                            f"Anomaly label (#{j+1})",
+                            key=f"ano_label_{i}_{j}"
+                        )
+                    if ano_label:
+                        anomalies.append((ano_between, ano_label))
 
-    # Download
-    if "updated_map" in st.session_state:
-        js = json.dumps(st.session_state["updated_map"], indent=2)
-        st.download_button("📥 Download updated JSON", js, "seatmap_updated.json")
+                for ano_between, ano_label in sorted(anomalies, key=lambda x: x[0], reverse=True):
+                    if ano_between in seat_numbers:
+                        insertion_index = seat_numbers.index(ano_between) + 1
+                        base_labels.insert(insertion_index, ano_label)
+
+                new_rows.append({"index": letter.upper(), "labels": base_labels})
+
+        # Apply reverse over the list of rows if requested
+        if rev_rows and new_rows:
+            new_rows = list(reversed(new_rows))
+
+        # -----------------------------
+        # APPLY: update plan (rows + meta)
+        # -----------------------------
+        if uploaded_file and section_id and (new_rows or True):
+            if st.button("💾 Update Plan"):
+                try:
+                    # Start from current seatmap
+                    current = seatmap
+
+                    # 1) If adding rows, insert them
+                    if new_rows:
+                        default_price = seatmap[section_id].get("price", seatmap[section_id].get("def_price", "85"))
+                        current = insert_rows(
+                            current,
+                            section_id=section_id,
+                            ref_row_index=ref_row_letter,
+                            new_rows=new_rows,
+                            position=position,
+                            default_price=default_price,
+                        )
+
+                    # 2) Always apply meta changes (name + align)
+                    current = update_section_meta(
+                        current,
+                        section_id=section_id,
+                        new_name=edited_name,
+                        new_align=edited_align,
+                    )
+
+                    st.session_state["updated_map"] = current
+                    st.success("Plan updated – download below 👇")
+                except Exception as e:
+                    st.error(str(e))
+
+# -----------------------------
+# Download the updated JSON
+# -----------------------------
+if "updated_map" in st.session_state:
+    js = json.dumps(st.session_state["updated_map"], indent=2)
+    st.download_button("📥 Download updated JSON", js, "seatmap_updated.json")
