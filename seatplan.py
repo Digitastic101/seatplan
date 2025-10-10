@@ -4,13 +4,13 @@ from typing import List, Dict
 import streamlit as st
 
 # ===============================
-# Alignment helpers
+# Alignment helpers (rotation-agnostic)
 # ===============================
 
 def _normalise_to_word(value: str) -> str:
     """
     Map any alignment token to 'left'|'center'|'right'.
-    Supports: 'L','R','C','def' and 'left','center','right'.
+    Supports: 'L','R','C','def' and 'left','center','right' (any case).
     Defaults to 'center' for unknown/None.
     """
     if not value:
@@ -33,7 +33,7 @@ def parse_alignment_word(section: dict) -> str:
 
 def set_alignment_fields(section: dict, word: str) -> dict:
     """
-    Return a COPY of section with BOTH fields set consistently:
+    Return a COPY of section with BOTH fields set consistently (no rotation logic):
       - align: L | R | def
       - alignment: left | center | right
     """
@@ -217,7 +217,7 @@ def update_section_details(
     """
     Update section_name and (optionally) alignment.
     - Name is updated if provided (non-empty).
-    - Alignment is ONLY updated if alignment_label is provided (i.e., user chose a new value).
+    - Alignment is ONLY updated if alignment_label is provided (user picked a value).
       When updated, writes BOTH fields: align (L/R/def) and alignment (left/center/right).
     """
     if section_id is None:
@@ -287,13 +287,12 @@ if seatmap:
         # Editable section name + alignment
         current_section = seatmap[section_id]
         current_name = current_section.get("section_name", "")
-        current_align_label = word_to_label(parse_alignment_word(current_section))
 
         col_name, col_align = st.columns([3, 2])
         with col_name:
             new_section_name = st.text_input("Section name", value=current_name)
         with col_align:
-            # Important: default to "Use current" so we don't auto-change alignment
+            # Default to "Use current" so we never change alignment unless asked
             align_options = ["Use current (no change)", "Left", "Centre", "Right"]
             align_choice = st.radio(
                 "Alignment",
@@ -304,6 +303,10 @@ if seatmap:
 
         # Decide whether to save alignment (only if user picked a specific value)
         alignment_label_to_save = None if align_choice == "Use current (no change)" else align_choice
+
+        # Small debug line so you can verify we won't overwrite alignment
+        st.caption(f"Current align/alignment: {current_section.get('align')} / {current_section.get('alignment')}. "
+                   f"Will write: {'(no change)' if not alignment_label_to_save else alignment_label_to_save}")
 
         # Rows preview
         rows_preview = []
@@ -348,7 +351,7 @@ if seatmap:
                 except Exception as e:
                     st.error(str(e))
 
-        # Relabel existing rows (doesn't force alignment; only if you chose one)
+        # Relabel existing rows (only saves alignment if you picked a value)
         with st.expander("Optional: Relabel existing rows (e.g. add '(RV) ' prefix)"):
             available_rows = sorted(
                 {r["row_index"] for r in seatmap[section_id]["rows"].values()},
@@ -367,7 +370,6 @@ if seatmap:
 
             if st.button("Apply relabel to selected rows"):
                 try:
-                    # Save name changes and optional alignment (only if user chose one)
                     seatmap_local = update_section_details(
                         seatmap,
                         section_id=section_id,
@@ -438,7 +440,7 @@ for i in range(int(num_rows)):
 if seatmap and section_id:
     if st.button("✅ Update seat plan"):
         try:
-            # Save name and optional alignment (only if user picked Left/Centre/Right)
+            # Save name and optional alignment (only if a specific value was chosen)
             seatmap_local = update_section_details(
                 seatmap,
                 section_id=section_id,
