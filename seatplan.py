@@ -4,7 +4,7 @@ from typing import List, Dict
 import streamlit as st
 
 # ===============================
-# Alignment helpers (always keep both fields in sync)
+# Alignment helpers
 # ===============================
 
 def _normalise_to_word(value: str) -> str:
@@ -181,28 +181,19 @@ def flip_rows_order(
     seatmap: Dict,
     *,
     section_id: str,
-    mode: str = "by_current",  # 'by_current' or 'alpha_az' or 'alpha_za'
+    reverse: bool = False,
 ) -> Dict:
     """
-    Reorders rows in a section by rebuilding the rows dict in a new order.
-    - by_current: reverse current order in the JSON
-    - alpha_az : sort by row_index A→Z
-    - alpha_za : sort by row_index Z→A
+    Reorders rows in a section. If reverse=True, reverse current order.
+    If reverse=False, keep current order (no change).
+    NOTE: Does NOT touch section name or alignment.
     """
     section = seatmap.get(section_id)
     if not section or "rows" not in section:
         return seatmap
 
     items = list(section["rows"].items())
-
-    if mode == "by_current":
-        new_items = list(reversed(items))
-    elif mode == "alpha_az":
-        new_items = sorted(items, key=lambda kv: str(kv[1].get("row_index", "")).upper())
-    elif mode == "alpha_za":
-        new_items = sorted(items, key=lambda kv: str(kv[1].get("row_index", "")).upper(), reverse=True)
-    else:
-        new_items = items  # no-op fallback
+    new_items = list(reversed(items)) if reverse else items
 
     new_rows = {}
     for rid, rdata in new_items:
@@ -215,7 +206,7 @@ def flip_rows_order(
     return new_map
 
 # ===============================
-# Section details updater (keeps BOTH align+alignment)
+# Section details updater
 # ===============================
 
 def update_section_details(
@@ -226,8 +217,10 @@ def update_section_details(
     alignment_label: str = None
 ) -> dict:
     """
-    Update section_name and alignment.
-    ALWAYS sets BOTH fields (align + alignment) to keep them married up.
+    Update section_name and (optionally) alignment.
+    - Name is updated if provided (non-empty).
+    - Alignment is ONLY updated if alignment_label is provided AND differs from current.
+      When we do update, we set BOTH fields align/alignment to keep them in sync.
     """
     if section_id is None:
         return seatmap
@@ -240,13 +233,12 @@ def update_section_details(
     if new_name is not None and new_name.strip():
         sec["section_name"] = new_name.strip()
 
-    # Alignment
+    # Alignment (only if changed)
     if alignment_label:
-        word = label_to_word(alignment_label)  # 'left'|'center'|'right'
-    else:
-        # If nothing chosen, keep existing as word
-        word = parse_alignment_word(sec)
-    sec = set_alignment_fields(sec, word)
+        existing_word = parse_alignment_word(sec)
+        chosen_word = label_to_word(alignment_label)
+        if chosen_word != existing_word:
+            sec = set_alignment_fields(sec, chosen_word)
 
     new_map[section_id] = sec
     return new_map
@@ -296,7 +288,7 @@ if seatmap:
         label_choice = st.selectbox("Select section containing that seat:", display_labels)
         section_id = dict(matched_rows)[label_choice]
 
-        # Editable section name + alignment (auto-applied on save)
+        # Editable section name + alignment (alignment only saved if changed)
         current_section = seatmap[section_id]
         current_name = current_section.get("section_name", "")
         current_align_label = word_to_label(parse_alignment_word(current_section))
@@ -312,14 +304,6 @@ if seatmap:
                 index=["Left", "Centre", "Right"].index(current_align_label),
             )
 
-        # (Optional) Debug — remove if not needed
-        with st.expander("Debug: alignment preview", expanded=False):
-            st.write("UI choice:", align_choice)
-            st.write("Current raw fields:",
-                     {"align": current_section.get("align"),
-                      "alignment": current_section.get("alignment")})
-            st.write("Normalised word:", parse_alignment_word(current_section))
-
         # Preview rows
         rows_preview = []
         for r in seatmap[section_id]["rows"].values():
@@ -334,45 +318,28 @@ if seatmap:
         st.markdown("**Rows in this section:** " + ", ".join(rows_preview))
 
         # ----------------------------------------
-        # NEW: Fix row order (flip / alphabetise)
+        # Fix row order (No change / Reverse only)
         # ----------------------------------------
         with st.expander("Fix row order"):
             flip_mode = st.radio(
-                "Flip / reorder mode",
-                ["Reverse current order", "Alphabetical A→Z", "Alphabetical Z→A"],
-                horizontal=False,
+                "Row order",
+                ["No change", "Reverse current order"],
+                horizontal=True,
             )
+            reverse_flag = (flip_mode == "Reverse current order")
 
-            # Build previews
-            items = list(seatmap[section_id]["rows"].items())
-            current_order = [r["row_index"] for _, r in items]
-
-            if flip_mode == "Reverse current order":
-                preview_new = list(reversed(current_order))
-                mode_key = "by_current"
-            elif flip_mode == "Alphabetical A→Z":
-                preview_new = sorted(current_order, key=lambda x: str(x).upper())
-                mode_key = "alpha_az"
-            else:
-                preview_new = sorted(current_order, key=lambda x: str(x).upper(), reverse=True)
-                mode_key = "alpha_za"
-
+            # Show a tiny preview (first ~15)
+            current_order = [r["row_index"] for _, r in seatmap[section_id]["rows"].items()]
             st.caption("Current order: " + " → ".join(current_order[:15]) + (" …" if len(current_order) > 15 else ""))
-            st.caption("New order:     " + " → ".join(preview_new[:15]) + (" …" if len(preview_new) > 15 else ""))
+            if reverse_flag:
+                st.caption("New order:     " + " → ".join(list(reversed(current_order[:15]))) + (" …" if len(current_order) > 15 else ""))
 
             if st.button("↕️ Apply row order change"):
                 try:
-                    # Apply section details (keep name + alignment synced)
-                    seatmap_local = update_section_details(
+                    updated = flip_rows_order(
                         seatmap,
                         section_id=section_id,
-                        new_name=new_section_name,
-                        alignment_label=align_choice
-                    )
-                    updated = flip_rows_order(
-                        seatmap_local,
-                        section_id=section_id,
-                        mode=mode_key
+                        reverse=reverse_flag
                     )
                     st.session_state["updated_map"] = updated
                     seatmap = updated  # keep UI in sync
@@ -380,7 +347,7 @@ if seatmap:
                 except Exception as e:
                     st.error(str(e))
 
-        # Relabel existing rows (also applies current name + alignment)
+        # Relabel existing rows
         with st.expander("Optional: Relabel existing rows (e.g. add '(RV) ' prefix)"):
             available_rows = sorted(
                 {r["row_index"] for r in seatmap[section_id]["rows"].values()},
@@ -403,7 +370,7 @@ if seatmap:
                         seatmap,
                         section_id=section_id,
                         new_name=new_section_name,
-                        alignment_label=align_choice
+                        alignment_label=align_choice  # will only update if changed
                     )
                     updated = relabel_rows(
                         seatmap_local,
@@ -413,7 +380,7 @@ if seatmap:
                     )
                     st.session_state["updated_map"] = updated
                     seatmap = updated  # keep in-memory state in sync
-                    st.success(f"Relabelled {len(selected_rows)} row(s) and updated section details.")
+                    st.success(f"Relabelled {len(selected_rows)} row(s) and applied any changed section details.")
                 except Exception as e:
                     st.error(str(e))
 
@@ -469,7 +436,7 @@ for i in range(int(num_rows)):
 if seatmap and section_id:
     if st.button("✅ Update seat plan"):
         try:
-            # Always apply section details (sets BOTH align + alignment)
+            # Apply section details (alignment only if changed)
             seatmap_local = update_section_details(
                 seatmap,
                 section_id=section_id,
@@ -488,10 +455,10 @@ if seatmap and section_id:
                     position=position,
                     default_price=default_price
                 )
-                msg = "Rows inserted and section details updated"
+                msg = "Rows inserted and changes saved"
             else:
                 updated = seatmap_local
-                msg = "Section details updated"
+                msg = "Changes saved"
 
             st.session_state["updated_map"] = updated
             seatmap = updated  # keep UI in sync
