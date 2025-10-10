@@ -26,9 +26,9 @@ def _normalise_to_word(value: str) -> str:
 
 def parse_alignment_word(section: dict) -> str:
     """Return 'left'|'center'|'right' from section fields."""
-    raw = section.get("align", None)
+    raw = section.get("align")
     if raw is None:
-        raw = section.get("alignment", None)
+        raw = section.get("alignment")
     return _normalise_to_word(raw)
 
 def set_alignment_fields(section: dict, word: str) -> dict:
@@ -195,9 +195,7 @@ def flip_rows_order(
     items = list(section["rows"].items())
     new_items = list(reversed(items)) if reverse else items
 
-    new_rows = {}
-    for rid, rdata in new_items:
-        new_rows[rid] = rdata
+    new_rows = {rid: rdata for rid, rdata in new_items}
 
     new_map = seatmap.copy()
     new_section = section.copy()
@@ -219,8 +217,8 @@ def update_section_details(
     """
     Update section_name and (optionally) alignment.
     - Name is updated if provided (non-empty).
-    - Alignment is ONLY updated if alignment_label is provided AND differs from current.
-      When we do update, we set BOTH fields align/alignment to keep them in sync.
+    - Alignment is ONLY updated if alignment_label is provided (i.e., user chose a new value).
+      When updated, writes BOTH fields: align (L/R/def) and alignment (left/center/right).
     """
     if section_id is None:
         return seatmap
@@ -233,12 +231,10 @@ def update_section_details(
     if new_name is not None and new_name.strip():
         sec["section_name"] = new_name.strip()
 
-    # Alignment (only if changed)
+    # Alignment (only if user chose a specific value)
     if alignment_label:
-        existing_word = parse_alignment_word(sec)
-        chosen_word = label_to_word(alignment_label)
-        if chosen_word != existing_word:
-            sec = set_alignment_fields(sec, chosen_word)
+        word = label_to_word(alignment_label)  # 'left'|'center'|'right'
+        sec = set_alignment_fields(sec, word)
 
     new_map[section_id] = sec
     return new_map
@@ -288,7 +284,7 @@ if seatmap:
         label_choice = st.selectbox("Select section containing that seat:", display_labels)
         section_id = dict(matched_rows)[label_choice]
 
-        # Editable section name + alignment (alignment only saved if changed)
+        # Editable section name + alignment
         current_section = seatmap[section_id]
         current_name = current_section.get("section_name", "")
         current_align_label = word_to_label(parse_alignment_word(current_section))
@@ -297,14 +293,19 @@ if seatmap:
         with col_name:
             new_section_name = st.text_input("Section name", value=current_name)
         with col_align:
+            # Important: default to "Use current" so we don't auto-change alignment
+            align_options = ["Use current (no change)", "Left", "Centre", "Right"]
             align_choice = st.radio(
                 "Alignment",
-                ["Left", "Centre", "Right"],
+                align_options,
                 horizontal=True,
-                index=["Left", "Centre", "Right"].index(current_align_label),
+                index=align_options.index("Use current (no change)"),
             )
 
-        # Preview rows
+        # Decide whether to save alignment (only if user picked a specific value)
+        alignment_label_to_save = None if align_choice == "Use current (no change)" else align_choice
+
+        # Rows preview
         rows_preview = []
         for r in seatmap[section_id]["rows"].values():
             letters = r["row_index"]
@@ -347,7 +348,7 @@ if seatmap:
                 except Exception as e:
                     st.error(str(e))
 
-        # Relabel existing rows
+        # Relabel existing rows (doesn't force alignment; only if you chose one)
         with st.expander("Optional: Relabel existing rows (e.g. add '(RV) ' prefix)"):
             available_rows = sorted(
                 {r["row_index"] for r in seatmap[section_id]["rows"].values()},
@@ -366,11 +367,12 @@ if seatmap:
 
             if st.button("Apply relabel to selected rows"):
                 try:
+                    # Save name changes and optional alignment (only if user chose one)
                     seatmap_local = update_section_details(
                         seatmap,
                         section_id=section_id,
                         new_name=new_section_name,
-                        alignment_label=align_choice  # will only update if changed
+                        alignment_label=alignment_label_to_save
                     )
                     updated = relabel_rows(
                         seatmap_local,
@@ -380,7 +382,7 @@ if seatmap:
                     )
                     st.session_state["updated_map"] = updated
                     seatmap = updated  # keep in-memory state in sync
-                    st.success(f"Relabelled {len(selected_rows)} row(s) and applied any changed section details.")
+                    st.success(f"Relabelled {len(selected_rows)} row(s) and saved changes.")
                 except Exception as e:
                     st.error(str(e))
 
@@ -436,12 +438,12 @@ for i in range(int(num_rows)):
 if seatmap and section_id:
     if st.button("✅ Update seat plan"):
         try:
-            # Apply section details (alignment only if changed)
+            # Save name and optional alignment (only if user picked Left/Centre/Right)
             seatmap_local = update_section_details(
                 seatmap,
                 section_id=section_id,
                 new_name=new_section_name,
-                alignment_label=align_choice
+                alignment_label=alignment_label_to_save
             )
 
             # If rows were provided, also insert them
