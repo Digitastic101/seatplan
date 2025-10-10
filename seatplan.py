@@ -74,7 +74,7 @@ def insert_rows(
                 updated_rows[pid] = pdata
 
     new_seatmap = seatmap.copy()
-    new_section = section.copy()
+    new_section = seatmap[section_id].copy()
     new_section["rows"] = updated_rows
     new_seatmap[section_id] = new_section
     return new_seatmap
@@ -134,6 +134,42 @@ def relabel_rows(
     return new_seatmap
 
 # -------------------------------------------------
+# Helper – update section name and alignment
+# -------------------------------------------------
+
+def update_section_details(
+    seatmap: Dict,
+    *,
+    section_id: str,
+    new_name: str = None,
+    alignment_choice: str = None
+) -> Dict:
+    """
+    Updates 'section_name' and 'alignment' on the section (non-destructive).
+    UI offers 'Left | Centre | Right', we normalise to 'left|center|right' for JSON.
+    """
+    if section_id is None:
+        return seatmap
+
+    normalised_alignment = None
+    if alignment_choice:
+        # UI uses British spelling in the label, keep JSON friendly values
+        mapping = {"Left": "left", "Centre": "center", "Right": "right"}
+        normalised_alignment = mapping.get(alignment_choice, alignment_choice)
+
+    new_map = seatmap.copy()
+    sec = new_map.get(section_id, {}).copy()
+
+    if new_name is not None and new_name.strip():
+        sec["section_name"] = new_name.strip()
+
+    if normalised_alignment is not None:
+        sec["alignment"] = normalised_alignment
+
+    new_map[section_id] = sec
+    return new_map
+
+# -------------------------------------------------
 # Streamlit UI
 # -------------------------------------------------
 
@@ -156,7 +192,9 @@ if uploaded_file:
         for rdata in sdata["rows"].values():
             if ref_row_letter == "0" or rdata["row_index"].upper() == ref_row_letter.upper():
                 if ref_row_letter == "0" or any(s["number"] == f"{ref_row_letter.upper()}{ref_seat_number}" for s in rdata["seats"].values()):
-                    matched_rows.append((f"{sdata['section_name']} (rows: {len(sdata['rows'])})", sid))
+                    # show section name and number of rows for selection label
+                    sec_name = sdata.get("section_name", sid)
+                    matched_rows.append((f"{sec_name} (rows: {len(sdata['rows'])})", sid))
                     break
 
     if not matched_rows:
@@ -166,6 +204,36 @@ if uploaded_file:
         label_choice = st.selectbox("Select section containing that seat:", display_labels)
         section_id = dict(matched_rows)[label_choice]
 
+        # -------------------------------
+        # EDIT: Section name & alignment
+        # -------------------------------
+        current_name = seatmap[section_id].get("section_name", "")
+        current_alignment = seatmap[section_id].get("alignment", "left")
+        # Map JSON value back to UI label
+        align_label_map = {"left": "Left", "center": "Centre", "right": "Right"}
+        current_align_label = align_label_map.get(str(current_alignment).lower(), "Left")
+
+        col_name, col_align = st.columns([3, 2])
+        with col_name:
+            new_section_name = st.text_input("Section name", value=current_name, key="edit_section_name")
+        with col_align:
+            align_choice = st.radio("Alignment", ["Left", "Centre", "Right"], horizontal=True, index=["Left","Centre","Right"].index(current_align_label))
+
+        # Quick apply for section details without changing rows
+        if st.button("💾 Update section details"):
+            try:
+                seatmap = update_section_details(
+                    seatmap,
+                    section_id=section_id,
+                    new_name=new_section_name,
+                    alignment_choice=align_choice
+                )
+                st.session_state["updated_map"] = seatmap
+                st.success("Section details updated.")
+            except Exception as e:
+                st.error(str(e))
+
+        # Preview existing rows
         rows_preview = []
         for r in seatmap[section_id]["rows"].values():
             letters = r["row_index"]
@@ -207,13 +275,21 @@ if uploaded_file:
 
             if st.button("Apply relabel to selected rows"):
                 try:
-                    updated = relabel_rows(
+                    # ensure latest section details are also applied
+                    seatmap_local = update_section_details(
                         seatmap,
+                        section_id=section_id,
+                        new_name=st.session_state.get("edit_section_name", current_name),
+                        alignment_choice=align_choice
+                    )
+                    updated = relabel_rows(
+                        seatmap_local,
                         section_id=section_id,
                         target_row_letters=selected_rows,
                         new_prefix=new_prefix
                     )
                     st.session_state["updated_map"] = updated
+                    seatmap = updated
                     st.success(f"Relabelled {len(selected_rows)} row(s).")
                 except Exception as e:
                     st.error(str(e))
@@ -271,10 +347,18 @@ for i in range(int(num_rows)):
 if uploaded_file and section_id and new_rows:
     if st.button("➕ Insert Rows"):
         try:
-            default_price = seatmap[section_id].get("price", "85")
+            # also carry through any edited section details
+            seatmap_local = update_section_details(
+                seatmap,
+                section_id=section_id,
+                new_name=st.session_state.get("edit_section_name", seatmap[section_id].get("section_name", "")),
+                alignment_choice=st.session_state.get("Alignment", None)  # radio stores by label; we pass via UI var above
+            )
+
+            default_price = seatmap_local[section_id].get("price", "85")
 
             update = insert_rows(
-                seatmap,
+                seatmap_local,
                 section_id=section_id,
                 ref_row_index=ref_row_letter,
                 new_rows=new_rows,
@@ -282,6 +366,7 @@ if uploaded_file and section_id and new_rows:
                 default_price=default_price
             )
             st.session_state["updated_map"] = update
+            seatmap = update
             st.success("Rows inserted – download below 👇")
         except Exception as e:
             st.error(str(e))
