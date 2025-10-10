@@ -25,7 +25,6 @@ def insert_rows(
     rows_items = list(section["rows"].items())
 
     ordered_pairs = []
-    # new_rows are assumed already in desired order (UI can reverse)
     for spec in new_rows:
         row_letter = spec["index"].upper()
         seat_labels = spec["labels"]
@@ -62,7 +61,7 @@ def insert_rows(
                     updated_rows[pid] = pdata
                 if ref_row_index != "0":
                     updated_rows[rid] = rdata
-            else:  # "below"
+            else:  # below
                 if ref_row_index != "0":
                     updated_rows[rid] = rdata
                 for pid, pdata in ordered_pairs:
@@ -151,10 +150,7 @@ def update_section_meta(
 # Direction helpers (operate on selected section)
 # -------------------------------------------------
 def _natural_seat_key(seat_label: str) -> tuple:
-    """
-    Sort like: 'A1', 'A2', 'A10' (not A1, A10, A2).
-    Returns (row_letters, number_int|0, original_label).
-    """
+    """Sort naturally: A1 < A2 < A10 (not A1, A10, A2)."""
     m = re.match(r"^([A-Za-z]+)(\d+)$", str(seat_label))
     if not m:
         return (seat_label, 0, seat_label)
@@ -162,9 +158,7 @@ def _natural_seat_key(seat_label: str) -> tuple:
     return (row.upper(), num, seat_label)
 
 def reverse_section_rows_order(seatmap: Dict, *, section_id: str) -> Dict:
-    """
-    Rebuilds the rows dict in reverse insertion order.
-    """
+    """Reverse row order for the whole section."""
     section = seatmap.get(section_id)
     if not section or "rows" not in section:
         return seatmap
@@ -183,10 +177,7 @@ def reverse_section_rows_order(seatmap: Dict, *, section_id: str) -> Dict:
 def reverse_section_seat_order_selective(
     seatmap: Dict, *, section_id: str, rows_to_reverse: List[str]
 ) -> Dict:
-    """
-    Reverse seat order only for the specified row labels (e.g., ['A','B','C']).
-    Labels are NOT changed—only dict order is reversed.
-    """
+    """Reverse seat order only for specified row labels (labels themselves unchanged)."""
     if not rows_to_reverse:
         return seatmap
 
@@ -225,18 +216,14 @@ st.title("🎭 Seat Plan Adaptions")
 uploaded_file = st.file_uploader("Upload your seatmap JSON", type="json")
 
 ref_row_letter = st.text_input(
-    "Reference row letter (e.g. 'B' – or '0' for section start)",
-    value="A"
+    "Reference row letter (e.g. 'B' – or '0' for section start)", value="A"
 )
-ref_seat_number = st.text_input(
-    "Seat number in that row (e.g. '17')",
-    value="1"
-)
+ref_seat_number = st.text_input("Seat number in that row (e.g. '17')", value="1")
 
 section_id = None
 seatmap = None
 
-# Defaults for direction controls to avoid UnboundLocal issues
+# Defaults to avoid UnboundLocal errors
 do_reverse_rows = False
 do_reverse_seats_master = False
 rows_selected: List[str] = []
@@ -257,7 +244,8 @@ if uploaded_file:
                 ):
                     # Friendly align label for the chooser
                     align_code = sdata.get("align", "def")
-                    align_friendly = {"l":"Left", "r":"Right", "def":"Centre (default)"}.get(align_code, align_code)
+                    align_friendly = {"l": "Left", "r": "Right", "def": "Centre (default)"}\
+                        .get(align_code, align_code)
                     label = f"{sdata.get('section_name','(unnamed)')} · rows: {len(sdata['rows'])} · align: {align_friendly}"
                     matched_rows.append((label, sid))
                     break
@@ -269,7 +257,7 @@ if uploaded_file:
         label_choice = st.selectbox("Select section containing that seat:", display_labels)
         section_id = dict(matched_rows)[label_choice]
 
-        # --- Preview rows in this section ---
+        # Preview rows in this section
         rows_preview = []
         for r in seatmap[section_id]["rows"].values():
             letters = r["row_index"]
@@ -282,17 +270,12 @@ if uploaded_file:
                 rows_preview.append(f"{letters}{min(nums)}–{max(nums)}")
         st.markdown("**Rows in this section:** " + (", ".join(rows_preview) or "(none)"))
 
-        # --- Editable section meta (NAME + ALIGN) ---
+        # Section settings (name + align)
         st.subheader("Section settings")
         current_name = seatmap[section_id].get("section_name", "")
         current_align = seatmap[section_id].get("align", "def")
 
-        # Map technical codes to friendly labels
-        align_labels = {
-            "l": "Left",
-            "r": "Right",
-            "def": "Centre (default)",
-        }
+        align_labels = {"l": "Left", "r": "Right", "def": "Centre (default)"}
         align_options = list(align_labels.keys())
         align_display = [align_labels[a] for a in align_options]
 
@@ -302,20 +285,15 @@ if uploaded_file:
         with col_al:
             selected_index = align_options.index(current_align) if current_align in align_options else 2
             display_choice = st.selectbox(
-                "Align",
-                align_display,
-                index=selected_index,
+                "Align", align_display, index=selected_index,
                 help="Where this section sits in the auditorium view."
             )
             edited_align = align_options[align_display.index(display_choice)]
 
         st.caption("Tip: Left / Right / Centre = seating alignment within the plan.")
 
-        # ---------------------------------------------
-        # OPTIONAL: Relabel existing rows + seat tags
-        # ---------------------------------------------
+        # Optional relabel
         with st.expander("Optional: Relabel existing rows (e.g. add '(RV) ' prefix)"):
-            # Available row letters in this section
             available_rows = []
             for r in seatmap[section_id]["rows"].values():
                 if "row_index" in r:
@@ -325,14 +303,12 @@ if uploaded_file:
             col_a, col_b = st.columns([2, 3])
             with col_a:
                 selected_rows = st.multiselect(
-                    "Rows to change",
-                    options=available_rows,
+                    "Rows to change", options=available_rows,
                     help="Pick one or more rows to relabel",
                 )
             with col_b:
                 new_prefix = st.text_input(
-                    "Prefix to add",
-                    value="(RV) ",
+                    "Prefix to add", value="(RV) ",
                     help="Applied to each selected row, e.g. '(RV) ' + T -> '(RV) T'",
                 )
 
@@ -343,21 +319,16 @@ if uploaded_file:
             if st.button("Apply relabel to selected rows"):
                 try:
                     seatmap = relabel_rows(
-                        seatmap,
-                        section_id=section_id,
-                        target_row_letters=selected_rows,
-                        new_prefix=new_prefix,
+                        seatmap, section_id=section_id,
+                        target_row_letters=selected_rows, new_prefix=new_prefix,
                     )
                     st.session_state["updated_map"] = seatmap
                     st.success(f"Relabelled {len(selected_rows)} row(s).")
                 except Exception as e:
                     st.error(str(e))
 
-        # -----------------------------
         # Direction options (apply on save)
-        # -----------------------------
         with st.expander("Fix direction for this section"):
-            # Preview
             row_ids = list(seatmap[section_id]["rows"].keys())
             row_labels = [seatmap[section_id]["rows"][rid].get("row_index", "") for rid in row_ids]
             if row_labels:
@@ -374,14 +345,12 @@ if uploaded_file:
             col_dir1, col_dir2 = st.columns(2)
             with col_dir1:
                 do_reverse_rows = st.checkbox(
-                    "Reverse **row order** in this section",
-                    value=False,
+                    "Reverse **row order** in this section", value=False,
                     help="Flips top↔bottom (or near↔far) order of rows. Applied on save."
                 )
             with col_dir2:
                 do_reverse_seats_master = st.checkbox(
-                    "Reverse seat order **per row**",
-                    value=False,
+                    "Reverse seat order **per row**", value=False,
                     help="Flips left↔right order; choose rows below. Applied on save."
                 )
 
@@ -401,16 +370,10 @@ if uploaded_file:
             st.caption("Labels (e.g., A1, A2) are left unchanged; this fixes visual direction without renumbering.")
 
         # -----------------------------
-        # Add rows
+        # Add rows  (NO reverse toggles here)
         # -----------------------------
         st.subheader("Add rows")
-
-        # Keep above/below option
         position = st.radio("Insert rows", ["above", "below"], horizontal=True)
-
-        # Direction rescue toggles for newly added rows
-        rev_rows = st.checkbox("Reverse the order of the NEW rows", value=False)
-        rev_seats = st.checkbox("Reverse seat numbers INSIDE each new row", value=False)
 
         num_rows = st.number_input("How many new rows to add?", 1, 10, 1)
 
@@ -426,14 +389,11 @@ if uploaded_file:
                 last = st.number_input("Last seat", 1, 999, 1, key=f"last_{i}")
 
             if letter:
-                # Build seat sequence
+                # Build seat sequence as typed (no "reverse new rows" UI anymore)
                 if first <= last:
                     seat_numbers = list(range(first, last + 1))
                 else:
                     seat_numbers = list(range(first, last - 1, -1))
-                # Optionally reverse inside-row numbering
-                if rev_seats:
-                    seat_numbers = list(reversed(seat_numbers))
 
                 base_labels = [f"{letter.upper()}{n}" for n in seat_numbers]
 
@@ -465,10 +425,6 @@ if uploaded_file:
                         base_labels.insert(insertion_index, ano_label)
 
                 new_rows.append({"index": letter.upper(), "labels": base_labels})
-
-        # Apply reverse over the list of rows if requested
-        if rev_rows and new_rows:
-            new_rows = list(reversed(new_rows))
 
         # -----------------------------
         # APPLY: update plan (rows + meta + direction)
@@ -503,8 +459,7 @@ if uploaded_file:
                         current = reverse_section_rows_order(current, section_id=section_id)
                     if do_reverse_seats_master:
                         current = reverse_section_seat_order_selective(
-                            current,
-                            section_id=section_id,
+                            current, section_id=section_id,
                             rows_to_reverse=rows_selected or []
                         )
 
