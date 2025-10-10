@@ -1,11 +1,16 @@
 import json
 import uuid
+import re
+from collections import OrderedDict
 from typing import List, Dict, Tuple
 import streamlit as st
 
+# =================================================
+# 🎭 Seat Plan Adaptions
+# =================================================
+
 # -------------------------------------------------
 # Core helper – inserts rows keeping the user order
-# (unchanged logic, just factored a tiny bit)
 # -------------------------------------------------
 def insert_rows(
     seatmap: Dict,
@@ -20,7 +25,7 @@ def insert_rows(
     rows_items = list(section["rows"].items())
 
     ordered_pairs = []
-    # NOTE: new_rows should already be in desired order (UI can reverse)
+    # new_rows are assumed already in desired order (UI can reverse)
     for spec in new_rows:
         row_letter = spec["index"].upper()
         seat_labels = spec["labels"]
@@ -82,7 +87,7 @@ def insert_rows(
 
 
 # -------------------------------------------------
-# Relabel multiple rows + their seats (as before)
+# Relabel multiple rows + their seats
 # -------------------------------------------------
 def relabel_rows(
     seatmap: Dict, *, section_id: str, target_row_letters: List[str], new_prefix: str
@@ -121,7 +126,7 @@ def relabel_rows(
 
 
 # -------------------------------------------------
-# NEW: update section meta (name + align)
+# Update section meta (name + align)
 # -------------------------------------------------
 def update_section_meta(
     seatmap: Dict,
@@ -143,9 +148,71 @@ def update_section_meta(
 
 
 # -------------------------------------------------
-# Streamlit UI
+# Direction helpers (operate on selected section)
 # -------------------------------------------------
-st.title("🎭 Update Plan: Add/Adjust Rows & Section Settings")
+def _natural_seat_key(seat_label: str) -> tuple:
+    """
+    Sort like: 'A1', 'A2', 'A10' (not A1, A10, A2).
+    Returns (row_letters, number_int|0, original_label).
+    """
+    m = re.match(r"^([A-Za-z]+)(\d+)$", str(seat_label))
+    if not m:
+        return (seat_label, 0, seat_label)
+    row, num = m.group(1), int(m.group(2))
+    return (row.upper(), num, seat_label)
+
+def reverse_section_rows_order(seatmap: Dict, *, section_id: str) -> Dict:
+    """
+    Rebuilds the rows dict in reverse insertion order.
+    """
+    section = seatmap.get(section_id)
+    if not section or "rows" not in section:
+        return seatmap
+
+    rows_items = list(section["rows"].items())  # preserves current order
+    reversed_rows = OrderedDict()
+    for rid, rdata in reversed(rows_items):
+        reversed_rows[rid] = rdata
+
+    updated = seatmap.copy()
+    updated_section = section.copy()
+    updated_section["rows"] = reversed_rows
+    updated[section_id] = updated_section
+    return updated
+
+def reverse_section_seat_order(seatmap: Dict, *, section_id: str) -> Dict:
+    """
+    For each row in the section, rebuilds the seats dict in the opposite order.
+    Labels are NOT changed—only the order in the dict.
+    """
+    section = seatmap.get(section_id)
+    if not section or "rows" not in section:
+        return seatmap
+
+    updated = seatmap.copy()
+    updated_section = section.copy()
+    new_rows = OrderedDict()
+
+    for rid, rdata in section["rows"].items():
+        seats_items = list(rdata.get("seats", {}).items())
+        seats_items_sorted = sorted(
+            seats_items, key=lambda kv: _natural_seat_key(kv[1].get("number", ""))
+        )
+        seats_items_reversed = list(reversed(seats_items_sorted))
+        new_seats = OrderedDict()
+        for sid, sdata in seats_items_reversed:
+            new_seats[sid] = sdata
+        new_rows[rid] = {**rdata, "seats": new_seats}
+
+    updated_section["rows"] = new_rows
+    updated[section_id] = updated_section
+    return updated
+
+
+# =================================================
+# Streamlit UI
+# =================================================
+st.title("🎭 Seat Plan Adaptions")
 
 uploaded_file = st.file_uploader("Upload your seatmap JSON", type="json")
 
@@ -175,7 +242,10 @@ if uploaded_file:
                     s["number"] == f"{ref_row_letter.upper()}{ref_seat_number}"
                     for s in rdata["seats"].values()
                 ):
-                    label = f"{sdata.get('section_name','(unnamed)')} · rows: {len(sdata['rows'])} · align: {sdata.get('align','def')}"
+                    # Friendly align label for the chooser
+                    align_code = sdata.get("align", "def")
+                    align_friendly = {"l":"Left", "r":"Right", "def":"Centre (default)"}.get(align_code, align_code)
+                    label = f"{sdata.get('section_name','(unnamed)')} · rows: {len(sdata['rows'])} · align: {align_friendly}"
                     matched_rows.append((label, sid))
                     break
 
@@ -186,7 +256,7 @@ if uploaded_file:
         label_choice = st.selectbox("Select section containing that seat:", display_labels)
         section_id = dict(matched_rows)[label_choice]
 
-        # --- Preview rows ---
+        # --- Preview rows in this section ---
         rows_preview = []
         for r in seatmap[section_id]["rows"].values():
             letters = r["row_index"]
@@ -204,16 +274,29 @@ if uploaded_file:
         current_name = seatmap[section_id].get("section_name", "")
         current_align = seatmap[section_id].get("align", "def")
 
-        # Build align options from the file (plus fallbacks)
-        # In your uploaded file we see 'l', 'r' and 'def' used across sections.
-        # We'll always include these and keep the current value visible.
-        align_options = sorted({current_align, "l", "r", "def"})
+        # Map technical codes to friendly labels
+        align_labels = {
+            "l": "Left",
+            "r": "Right",
+            "def": "Centre (default)",
+        }
+        align_options = list(align_labels.keys())
+        align_display = [align_labels[a] for a in align_options]
+
         col_sn, col_al = st.columns([3, 1])
         with col_sn:
             edited_name = st.text_input("Section name", value=current_name)
         with col_al:
-            edited_align = st.selectbox("Align", align_options, index=align_options.index(current_align) if current_align in align_options else 0)
-        st.caption("Tip: align = l (left), r (right), def (engine default).")
+            selected_index = align_options.index(current_align) if current_align in align_options else 2
+            display_choice = st.selectbox(
+                "Align",
+                align_display,
+                index=selected_index,
+                help="Where this section sits in the auditorium view."
+            )
+            edited_align = align_options[align_display.index(display_choice)]
+
+        st.caption("Tip: Left / Right / Centre = seating alignment within the plan.")
 
         # ---------------------------------------------
         # OPTIONAL: Relabel existing rows + seat tags
@@ -258,13 +341,62 @@ if uploaded_file:
                     st.error(str(e))
 
         # -----------------------------
-        # Controls for adding new rows
+        # Direction tools (selected section)
+        # -----------------------------
+        with st.expander("Fix direction for this section"):
+            # Quick preview of current order
+            row_ids = list(seatmap[section_id]["rows"].keys())
+            row_labels = [seatmap[section_id]["rows"][rid].get("row_index", "") for rid in row_ids]
+            if row_labels:
+                st.caption(f"Current row order: {row_labels[0]} … {row_labels[-1]}")
+
+            # Pick a sample row to show seat direction preview
+            sample_row_id = row_ids[0] if row_ids else None
+            if sample_row_id:
+                r = seatmap[section_id]["rows"][sample_row_id]
+                seat_labels = [s["number"] for s in r.get("seats", {}).values()]
+                seat_labels_sorted = sorted(seat_labels, key=_natural_seat_key)
+                if seat_labels_sorted:
+                    st.caption(f"Sample seat direction (row {r.get('row_index','')}): {seat_labels_sorted[0]} … {seat_labels_sorted[-1]}")
+
+            col_dir1, col_dir2 = st.columns(2)
+            with col_dir1:
+                do_reverse_rows = st.checkbox(
+                    "Reverse **row order** in this section",
+                    value=False,
+                    help="Flips top↔bottom (or near↔far) order of rows."
+                )
+            with col_dir2:
+                do_reverse_seats = st.checkbox(
+                    "Reverse **seat order** inside each row",
+                    value=False,
+                    help="Flips left↔right order by reversing seat dictionaries (labels unchanged)."
+                )
+
+            st.caption("Labels (e.g., A1, A2) are left unchanged; this typically fixes visual direction without renumbering.")
+
+            if st.button("Apply direction fixes to this section"):
+                try:
+                    updated_map = seatmap
+                    if do_reverse_rows:
+                        updated_map = reverse_section_rows_order(updated_map, section_id=section_id)
+                    if do_reverse_seats:
+                        updated_map = reverse_section_seat_order(updated_map, section_id=section_id)
+
+                    st.session_state["updated_map"] = updated_map
+                    seatmap = updated_map  # refresh previews
+                    st.success("Direction updated for this section.")
+                except Exception as e:
+                    st.error(str(e))
+
+        # -----------------------------
+        # Add rows
         # -----------------------------
         st.subheader("Add rows")
 
         position = st.radio("Insert rows", ["above", "below"], horizontal=True)
 
-        # NEW: Direction rescue toggles
+        # Direction rescue toggles for newly added rows
         rev_rows = st.checkbox("Reverse the order of the NEW rows", value=False)
         rev_seats = st.checkbox("Reverse seat numbers INSIDE each new row", value=False)
 
@@ -329,10 +461,9 @@ if uploaded_file:
         # -----------------------------
         # APPLY: update plan (rows + meta)
         # -----------------------------
-        if uploaded_file and section_id and (new_rows or True):
+        if uploaded_file and section_id:
             if st.button("💾 Update Plan"):
                 try:
-                    # Start from current seatmap
                     current = seatmap
 
                     # 1) If adding rows, insert them
@@ -347,7 +478,7 @@ if uploaded_file:
                             default_price=default_price,
                         )
 
-                    # 2) Always apply meta changes (name + align)
+                    # 2) Apply meta changes (name + align)
                     current = update_section_meta(
                         current,
                         section_id=section_id,
