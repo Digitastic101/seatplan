@@ -3,9 +3,94 @@ import uuid
 from typing import List, Dict
 import streamlit as st
 
-# -------------------------------------------------
-# Core helper – inserts rows keeping the user order
-# -------------------------------------------------
+# ===============================
+# Alignment helpers (L/R/def or words)
+# ===============================
+
+def _normalise_to_word(value: str) -> str:
+    """
+    Map any alignment token to 'left'|'center'|'right'.
+    Supports: 'L','R','C','def' and 'left','center','right'.
+    Defaults to 'center' for unknown/None.
+    """
+    if not value:
+        return "center"
+    v = str(value).strip().lower()
+    if v in ("left", "l"):
+        return "left"
+    if v in ("right", "r"):
+        return "right"
+    if v in ("center", "centre", "c", "def", "default"):
+        return "center"
+    return "center"
+
+
+def _word_to_radio_label(word: str) -> str:
+    # UI labels are "Left", "Centre", "Right"
+    return {"left": "Left", "center": "Centre", "right": "Right"}[word]
+
+
+def _radio_label_to_word(label: str) -> str:
+    # Map UI label back to word for internal normalised handling
+    return {"Left": "left", "Centre": "center", "Right": "right"}[label]
+
+
+def resolve_current_alignment_for_ui(section: dict) -> str:
+    """
+    Decide which alignment to display in the radio based on the section data.
+    Prefers 'align' if present (L/R/def), else falls back to 'alignment' (left/center/right).
+    Returns UI label: 'Left'|'Centre'|'Right'
+    """
+    raw = section.get("align")
+    if raw is None:
+        raw = section.get("alignment")
+    word = _normalise_to_word(raw)
+    return _word_to_radio_label(word)
+
+
+def update_section_details(
+    seatmap: dict,
+    *,
+    section_id: str,
+    new_name: str = None,
+    alignment_label: str = None
+) -> dict:
+    """
+    Update section_name and alignment, preserving the original schema:
+    - If section has 'align' key -> write 'L'|'R'|'def'
+    - Else -> write 'alignment' as 'left'|'center'|'right'
+    Keeps both keys in sync if both exist already.
+    """
+    if section_id is None:
+        return seatmap
+
+    new_map = seatmap.copy()
+    sec = new_map.get(section_id, {}).copy()
+
+    # Name
+    if new_name is not None and new_name.strip():
+        sec["section_name"] = new_name.strip()
+
+    # Alignment
+    if alignment_label:
+        word = _radio_label_to_word(alignment_label)      # 'left'|'center'|'right'
+        compact = {"left": "L", "right": "R", "center": "def"}[word]
+
+        if "align" in sec:
+            sec["align"] = compact
+            if "alignment" in sec:
+                sec["alignment"] = word
+        else:
+            sec["alignment"] = word
+            if "align" in sec:
+                sec["align"] = compact
+
+    new_map[section_id] = sec
+    return new_map
+
+# ===============================
+# Core helper – insert rows
+# ===============================
 
 def insert_rows(
     seatmap: Dict,
@@ -79,9 +164,9 @@ def insert_rows(
     new_seatmap[section_id] = new_section
     return new_seatmap
 
-# -------------------------------------------------
+# ===============================
 # Relabel rows helper
-# -------------------------------------------------
+# ===============================
 
 def relabel_rows(
     seatmap: Dict,
@@ -127,37 +212,9 @@ def relabel_rows(
     new_seatmap[section_id] = new_section
     return new_seatmap
 
-# -------------------------------------------------
-# Helper – update section name and alignment
-# -------------------------------------------------
-
-def update_section_details(
-    seatmap: Dict,
-    *,
-    section_id: str,
-    new_name: str = None,
-    alignment_choice: str = None
-) -> Dict:
-    if section_id is None:
-        return seatmap
-
-    mapping = {"Left": "left", "Centre": "center", "Right": "right"}
-    normalised_alignment = mapping.get(alignment_choice, None)
-
-    new_map = seatmap.copy()
-    sec = new_map.get(section_id, {}).copy()
-
-    if new_name:
-        sec["section_name"] = new_name.strip()
-    if normalised_alignment:
-        sec["alignment"] = normalised_alignment
-
-    new_map[section_id] = sec
-    return new_map
-
-# -------------------------------------------------
+# ===============================
 # Streamlit UI
-# -------------------------------------------------
+# ===============================
 
 st.title("🎭 Update Seat Plan")
 
@@ -194,11 +251,9 @@ if uploaded_file:
         label_choice = st.selectbox("Select section containing that seat:", display_labels)
         section_id = dict(matched_rows)[label_choice]
 
-        # Editable section name + alignment
+        # Editable section name + alignment (auto-applied on save)
         current_name = seatmap[section_id].get("section_name", "")
-        current_alignment = seatmap[section_id].get("alignment", "left")
-        align_label_map = {"left": "Left", "center": "Centre", "right": "Right"}
-        current_align_label = align_label_map.get(str(current_alignment).lower(), "Left")
+        current_align_label = resolve_current_alignment_for_ui(seatmap[section_id])
 
         col_name, col_align = st.columns([3, 2])
         with col_name:
@@ -224,7 +279,7 @@ if uploaded_file:
                 rows_preview.append(f"{letters}{min(nums)}–{max(nums)}")
         st.markdown("**Rows in this section:** " + ", ".join(rows_preview))
 
-        # Relabel existing rows
+        # Relabel existing rows (also applies current name + alignment)
         with st.expander("Optional: Relabel existing rows (e.g. add '(RV) ' prefix)"):
             available_rows = sorted(
                 {r["row_index"] for r in seatmap[section_id]["rows"].values()},
@@ -243,12 +298,11 @@ if uploaded_file:
 
             if st.button("Apply relabel to selected rows"):
                 try:
-                    # Always apply section details too
                     seatmap_local = update_section_details(
                         seatmap,
                         section_id=section_id,
                         new_name=new_section_name,
-                        alignment_choice=align_choice
+                        alignment_label=align_choice
                     )
                     updated = relabel_rows(
                         seatmap_local,
@@ -262,12 +316,12 @@ if uploaded_file:
                 except Exception as e:
                     st.error(str(e))
 
-# -------------------------------------------------
+# -----------------------------
 # Add new rows (optional)
-# -------------------------------------------------
+# -----------------------------
 
 position = st.radio("Insert rows", ["above", "below"], horizontal=True)
-num_rows = st.number_input("How many new rows to add?", 0, 10, 0)  # allow 0 so you can just save details
+num_rows = st.number_input("How many new rows to add?", 0, 10, 0)  # allow 0 to only save details
 
 new_rows = []
 for i in range(int(num_rows)):
@@ -307,9 +361,9 @@ for i in range(int(num_rows)):
 
         new_rows.append({"index": letter.upper(), "labels": base_labels})
 
-# -------------------------------------------------
-# Single action button: Update seat plan
-# -------------------------------------------------
+# -----------------------------
+# Single action button
+# -----------------------------
 
 if uploaded_file and section_id:
     if st.button("✅ Update seat plan"):
@@ -319,7 +373,7 @@ if uploaded_file and section_id:
                 seatmap,
                 section_id=section_id,
                 new_name=new_section_name,
-                alignment_choice=align_choice
+                alignment_label=align_choice
             )
 
             # If rows were provided, also insert them
@@ -343,9 +397,9 @@ if uploaded_file and section_id:
         except Exception as e:
             st.error(str(e))
 
-# -------------------------------------------------
-# Download updated map
-# -------------------------------------------------
+# -----------------------------
+# Download
+# -----------------------------
 
 if "updated_map" in st.session_state:
     js = json.dumps(st.session_state["updated_map"], indent=2)
