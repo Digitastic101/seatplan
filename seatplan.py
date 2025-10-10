@@ -212,4 +212,130 @@ if uploaded_file:
 
         # Preview rows
         rows_preview = []
-        f
+        for r in seatmap[section_id]["rows"].values():
+            letters = r["row_index"]
+            nums = [
+                int(s["number"][len(letters):])
+                for s in r["seats"].values()
+                if s["number"][len(letters):].isdigit()
+            ]
+            if nums:
+                rows_preview.append(f"{letters}{min(nums)}–{max(nums)}")
+        st.markdown("**Rows in this section:** " + ", ".join(rows_preview))
+
+        # Relabel existing rows
+        with st.expander("Optional: Relabel existing rows (e.g. add '(RV) ' prefix)"):
+            available_rows = sorted(
+                {r["row_index"] for r in seatmap[section_id]["rows"].values()},
+                key=lambda x: x.upper()
+            )
+
+            col_a, col_b = st.columns([2, 3])
+            with col_a:
+                selected_rows = st.multiselect("Rows to change", options=available_rows)
+            with col_b:
+                new_prefix = st.text_input("Prefix to add", value="(RV) ")
+
+            if selected_rows:
+                preview_samples = ", ".join([f"{new_prefix}{r}" for r in selected_rows[:3]])
+                st.caption(f"Preview: {preview_samples}{'…' if len(selected_rows) > 3 else ''}")
+
+            if st.button("Apply relabel to selected rows"):
+                try:
+                    # Apply name/alignment updates at same time
+                    seatmap_local = update_section_details(
+                        seatmap,
+                        section_id=section_id,
+                        new_name=new_section_name,
+                        alignment_choice=align_choice
+                    )
+                    updated = relabel_rows(
+                        seatmap_local,
+                        section_id=section_id,
+                        target_row_letters=selected_rows,
+                        new_prefix=new_prefix
+                    )
+                    st.session_state["updated_map"] = updated
+                    seatmap = updated
+                    st.success(f"Relabelled {len(selected_rows)} row(s) and updated section details.")
+                except Exception as e:
+                    st.error(str(e))
+
+# -------------------------------------------------
+# Add new rows
+# -------------------------------------------------
+
+position = st.radio("Insert rows", ["above", "below"], horizontal=True)
+num_rows = st.number_input("How many new rows to add?", 1, 10, 1)
+
+new_rows = []
+for i in range(int(num_rows)):
+    st.markdown(f"### Row #{i+1}")
+    col1, col2, col3 = st.columns([1, 1, 2])
+    with col1:
+        letter = st.text_input(f"Row letter #{i+1}", key=f"row_letter_{i}")
+    with col2:
+        first = st.number_input("First seat", 1, 999, 1, key=f"first_{i}")
+    with col3:
+        last = st.number_input("Last seat", 1, 999, 1, key=f"last_{i}")
+
+    if letter:
+        seat_numbers = list(range(first, last + 1)) if first <= last else list(range(first, last - 1, -1))
+        base_labels = [f"{letter.upper()}{n}" for n in seat_numbers]
+
+        num_anomalies = st.number_input(f"How many anomalies in Row #{i+1}?", 0, 5, 0, key=f"num_ano_{i}")
+        anomalies = []
+        for j in range(num_anomalies):
+            col_a1, col_a2 = st.columns([2, 3])
+            with col_a1:
+                ano_between = st.number_input(
+                    f"Insert anomaly between... (#{j+1})",
+                    min_value=min(first, last),
+                    max_value=max(first, last) - 1,
+                    key=f"ano_pos_{i}_{j}"
+                )
+            with col_a2:
+                ano_label = st.text_input(f"Anomaly label (#{j+1})", key=f"ano_label_{i}_{j}")
+            if ano_label:
+                anomalies.append((ano_between, ano_label))
+
+        for ano_between, ano_label in sorted(anomalies, key=lambda x: x[0], reverse=True):
+            if ano_between in seat_numbers:
+                insertion_index = seat_numbers.index(ano_between) + 1
+                base_labels.insert(insertion_index, ano_label)
+
+        new_rows.append({"index": letter.upper(), "labels": base_labels})
+
+if uploaded_file and section_id and new_rows:
+    if st.button("➕ Insert Rows"):
+        try:
+            # Apply section name + alignment automatically
+            seatmap_local = update_section_details(
+                seatmap,
+                section_id=section_id,
+                new_name=new_section_name,
+                alignment_choice=align_choice
+            )
+
+            default_price = seatmap_local[section_id].get("price", "85")
+
+            update = insert_rows(
+                seatmap_local,
+                section_id=section_id,
+                ref_row_index=ref_row_letter,
+                new_rows=new_rows,
+                position=position,
+                default_price=default_price
+            )
+            st.session_state["updated_map"] = update
+            st.success("Rows inserted and section details updated – download below 👇")
+        except Exception as e:
+            st.error(str(e))
+
+# -------------------------------------------------
+# Download updated map
+# -------------------------------------------------
+
+if "updated_map" in st.session_state:
+    js = json.dumps(st.session_state["updated_map"], indent=2)
+    st.download_button("📥 Download updated JSON", js, "seatmap_updated.json")
