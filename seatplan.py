@@ -209,44 +209,63 @@ def reverse_section_seat_order_selective(
 
 
 # -------------------------------------------------
-# NEW: Delete a row only if it contains exactly one seat and it's '<row_index>1' (e.g., only A1)
+# NEW: robust delete of rows that only contain the "first" seat (A1/B1/etc.)
 # -------------------------------------------------
+def _extract_base_row_letters(row_index: str) -> str:
+    """
+    From a row_index like 'A', '(RV) A', 'VIP A', return the trailing letters token, e.g. 'A'.
+    """
+    m = re.search(r"([A-Za-z]+)$", str(row_index))
+    return m.group(1).upper() if m else str(row_index).strip().upper()
+
+def _parse_seat_label(label: str) -> Tuple[str, int]:
+    """
+    Parse 'A1', 'A01' -> ('A', 1). Returns (letters.upper(), number) or (label, -1) if not parseable.
+    """
+    m = re.match(r"^\s*([A-Za-z]+)\s*0*(\d+)\s*$", str(label))
+    if not m:
+        return (str(label).strip().upper(), -1)
+    return (m.group(1).upper(), int(m.group(2)))
+
 def delete_rows_where_only_first_seat(
     seatmap: Dict, *, section_id: str, rows_filter: List[str] = None
-) -> Dict:
+) -> Tuple[Dict, int]:
     """
-    Remove any row that has exactly one seat and that seat's 'number' equals
-    f'{row_index}1' (case-insensitive). Optionally limit to certain rows with rows_filter.
+    Remove any row that has exactly one seat and that seat corresponds to '<base_row_letters>1'.
+    Returns (updated_seatmap, deleted_count).
     """
     section = seatmap.get(section_id)
     if not section or "rows" not in section:
-        return seatmap
+        return seatmap, 0
 
     rows_filter_upper = {r.upper() for r in rows_filter} if rows_filter else None
 
     updated = seatmap.copy()
     updated_section = section.copy()
     new_rows = OrderedDict()
+    deleted = 0
 
     for rid, rdata in section["rows"].items():
-        row_label = str(rdata.get("row_index", "")).upper()
-        if rows_filter_upper is not None and row_label not in rows_filter_upper:
+        row_label_raw = str(rdata.get("row_index", ""))
+        base_letters = _extract_base_row_letters(row_label_raw)
+
+        if rows_filter_upper is not None and base_letters not in rows_filter_upper and row_label_raw.upper() not in rows_filter_upper:
             new_rows[rid] = rdata
             continue
 
         seats_dict = rdata.get("seats", {})
         if len(seats_dict) == 1:
-            only_sid, only_sdata = next(iter(seats_dict.items()))
-            only_label = str(only_sdata.get("number", "")).upper()
-            if only_label == f"{row_label}1":
-                # Skip adding this row -> delete it
-                continue
+            _, only_sdata = next(iter(seats_dict.items()))
+            seat_letters, seat_num = _parse_seat_label(only_sdata.get("number", ""))
+            if seat_letters == base_letters and seat_num == 1:
+                deleted += 1
+                continue  # skip -> delete this row
 
         new_rows[rid] = rdata
 
     updated_section["rows"] = new_rows
     updated[section_id] = updated_section
-    return updated
+    return updated, deleted
 
 
 # =================================================
@@ -281,7 +300,7 @@ if uploaded_file:
         for rdata in sdata["rows"].values():
             if ref_row_letter == "0" or rdata["row_index"].upper() == ref_row_letter.upper():
                 if ref_row_letter == "0" or any(
-                    s["number"] == f"{ref_row_letter.upper()}{ref_seat_number}"
+                    str(s.get("number", "")).upper() == f"{ref_row_letter.upper()}{ref_seat_number}".upper()
                     for s in rdata["seats"].values()
                 ):
                     # Friendly align label for the chooser
@@ -302,11 +321,14 @@ if uploaded_file:
         # Preview rows in this section
         rows_preview = []
         for r in seatmap[section_id]["rows"].values():
-            letters = r["row_index"]
+            letters = str(r.get("row_index", ""))
+            base_letters = _extract_base_row_letters(letters)
             nums = [
-                int(s["number"][len(letters):])
+                # show numeric range only for parseable labels matching this row's base letters
+                int(re.match(r"^\s*[A-Za-z]+\s*0*(\d+)\s*$", s.get("number","")).group(1))
                 for s in r["seats"].values()
-                if s["number"][len(letters):].isdigit()
+                if re.match(r"^\s*([A-Za-z]+)\s*0*(\d+)\s*$", s.get("number","")) and
+                   _parse_seat_label(s.get("number",""))[0] == base_letters
             ]
             if nums:
                 rows_preview.append(f"{letters}{min(nums)}–{max(nums)}")
@@ -411,13 +433,24 @@ if uploaded_file:
 
             st.caption("Labels (e.g., A1, A2) are left unchanged; this fixes visual direction without renumbering.")
 
-        # NEW: Cleanup options
+        # NEW: Cleanup options (independent)
         with st.expander("Cleanup options"):
             do_delete_lonely_first = st.checkbox(
                 "Delete rows that only contain the first seat (e.g., row A with just A1)",
                 value=False,
-                help="If a row has exactly one seat and its label equals RowIndex + '1' (A1, B1, etc.), delete that entire row."
+                help="If a row has exactly one seat and its label corresponds to RowLetters + 1, delete that entire row."
             )
+
+            # Independent one-click action
+            if st.button("🧹 Apply cleanup now"):
+                try:
+                    updated_map, deleted = delete_rows_where_only_first_seat(
+                        seatmap, section_id=section_id
+                    )
+                    st.session_state["updated_map"] = updated_map
+                    st.success(f"Deleted {deleted} row(s) that only contained the first seat.")
+                except Exception as e:
+                    st.error(str(e))
 
         # -----------------------------
         # Add rows  (NO reverse toggles here)
@@ -513,13 +546,12 @@ if uploaded_file:
                             rows_to_reverse=rows_selected or []
                         )
 
-                    # 4) Cleanup: delete rows that only have `<row>1`
+                    # 4) Cleanup: delete rows that only have '<row>1'
                     if do_delete_lonely_first:
-                        current = delete_rows_where_only_first_seat(
-                            current,
-                            section_id=section_id,
-                            # If you ever want to limit it to selected rows, pass rows_filter=rows_selected
+                        current, deleted = delete_rows_where_only_first_seat(
+                            current, section_id=section_id
                         )
+                        st.info(f"Cleanup removed {deleted} row(s).")
 
                     st.session_state["updated_map"] = current
                     st.success("Plan updated – download below 👇")
