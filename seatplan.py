@@ -208,6 +208,47 @@ def reverse_section_seat_order_selective(
     return updated
 
 
+# -------------------------------------------------
+# NEW: Delete a row only if it contains exactly one seat and it's '<row_index>1' (e.g., only A1)
+# -------------------------------------------------
+def delete_rows_where_only_first_seat(
+    seatmap: Dict, *, section_id: str, rows_filter: List[str] = None
+) -> Dict:
+    """
+    Remove any row that has exactly one seat and that seat's 'number' equals
+    f'{row_index}1' (case-insensitive). Optionally limit to certain rows with rows_filter.
+    """
+    section = seatmap.get(section_id)
+    if not section or "rows" not in section:
+        return seatmap
+
+    rows_filter_upper = {r.upper() for r in rows_filter} if rows_filter else None
+
+    updated = seatmap.copy()
+    updated_section = section.copy()
+    new_rows = OrderedDict()
+
+    for rid, rdata in section["rows"].items():
+        row_label = str(rdata.get("row_index", "")).upper()
+        if rows_filter_upper is not None and row_label not in rows_filter_upper:
+            new_rows[rid] = rdata
+            continue
+
+        seats_dict = rdata.get("seats", {})
+        if len(seats_dict) == 1:
+            only_sid, only_sdata = next(iter(seats_dict.items()))
+            only_label = str(only_sdata.get("number", "")).upper()
+            if only_label == f"{row_label}1":
+                # Skip adding this row -> delete it
+                continue
+
+        new_rows[rid] = rdata
+
+    updated_section["rows"] = new_rows
+    updated[section_id] = updated_section
+    return updated
+
+
 # =================================================
 # Streamlit UI
 # =================================================
@@ -227,6 +268,7 @@ seatmap = None
 do_reverse_rows = False
 do_reverse_seats_master = False
 rows_selected: List[str] = []
+do_delete_lonely_first = False  # NEW default
 
 if uploaded_file:
     seatmap = json.load(uploaded_file)
@@ -369,6 +411,14 @@ if uploaded_file:
 
             st.caption("Labels (e.g., A1, A2) are left unchanged; this fixes visual direction without renumbering.")
 
+        # NEW: Cleanup options
+        with st.expander("Cleanup options"):
+            do_delete_lonely_first = st.checkbox(
+                "Delete rows that only contain the first seat (e.g., row A with just A1)",
+                value=False,
+                help="If a row has exactly one seat and its label equals RowIndex + '1' (A1, B1, etc.), delete that entire row."
+            )
+
         # -----------------------------
         # Add rows  (NO reverse toggles here)
         # -----------------------------
@@ -427,7 +477,7 @@ if uploaded_file:
                 new_rows.append({"index": letter.upper(), "labels": base_labels})
 
         # -----------------------------
-        # APPLY: update plan (rows + meta + direction)
+        # APPLY: update plan (rows + meta + direction + cleanup)
         # -----------------------------
         if uploaded_file and section_id:
             if st.button("💾 Update Plan"):
@@ -454,13 +504,21 @@ if uploaded_file:
                         new_align=edited_align,
                     )
 
-                    # 3) Apply direction fixes last (affects newly added rows too)
+                    # 3) Apply direction fixes (affects newly added rows too)
                     if do_reverse_rows:
                         current = reverse_section_rows_order(current, section_id=section_id)
                     if do_reverse_seats_master:
                         current = reverse_section_seat_order_selective(
                             current, section_id=section_id,
                             rows_to_reverse=rows_selected or []
+                        )
+
+                    # 4) Cleanup: delete rows that only have `<row>1`
+                    if do_delete_lonely_first:
+                        current = delete_rows_where_only_first_seat(
+                            current,
+                            section_id=section_id,
+                            # If you ever want to limit it to selected rows, pass rows_filter=rows_selected
                         )
 
                     st.session_state["updated_map"] = current
