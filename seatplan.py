@@ -209,7 +209,7 @@ def reverse_section_seat_order_selective(
 
 
 # -------------------------------------------------
-# NEW: delete any row that has exactly one seat (label-agnostic)
+# Delete any row that has exactly one seat (label-agnostic)
 # -------------------------------------------------
 def delete_rows_with_exactly_one_seat(
     seatmap: Dict, *, section_id: str
@@ -258,45 +258,61 @@ seatmap = None
 do_reverse_rows = False
 do_reverse_seats_master = False
 rows_selected: List[str] = []
-do_delete_lonely_first = False  # NEW: single-seat row deletion
+do_delete_lonely_first = False  # single-seat row deletion
 
 if uploaded_file:
     seatmap = json.load(uploaded_file)
 
-    # Find candidate sections from the reference row/seat
+    # --------------------------------------------
+    # Find candidate sections (forgiving + fallback)
+    # --------------------------------------------
     matched_rows: List[Tuple[str, str]] = []
+    base_letters_match = re.search(r"([A-Za-z]+)", ref_row_letter or "")
+    base_letters = base_letters_match.group(1).upper() if base_letters_match else ""
+
     for sid, sdata in seatmap.items():
-        if "rows" not in sdata:
+        rows = sdata.get("rows", {})
+        if not rows:
             continue
-        for rdata in sdata["rows"].values():
-            if ref_row_letter == "0" or rdata["row_index"].upper() == ref_row_letter.upper():
-                if ref_row_letter == "0" or any(
-                    str(s.get("number", "")).upper() == f"{ref_row_letter.upper()}{ref_seat_number}".upper()
-                    for s in rdata["seats"].values()
-                ):
-                    # Friendly align label for the chooser
-                    align_code = sdata.get("align", "def")
-                    align_friendly = {"l": "Left", "r": "Right", "def": "Centre (default)"}\
-                        .get(align_code, align_code)
-                    label = f"{sdata.get('section_name','(unnamed)')} · rows: {len(sdata['rows'])} · align: {align_friendly}"
-                    matched_rows.append((label, sid))
-                    break
+        for rdata in rows.values():
+            row_idx_raw = str(rdata.get("row_index", ""))
+            row_idx_letters_match = re.search(r"([A-Za-z]+)$", row_idx_raw)
+            row_idx_letters = row_idx_letters_match.group(1).upper() if row_idx_letters_match else row_idx_raw.upper()
+
+            # Relaxed: match by row letters only; do NOT require an exact seat match
+            if ref_row_letter == "0" or (base_letters and row_idx_letters == base_letters):
+                align_code = sdata.get("align", "def")
+                align_friendly = {"l": "Left", "r": "Right", "def": "Centre (default)"}.get(align_code, align_code)
+                label = f"{sdata.get('section_name','(unnamed)')} · rows: {len(rows)} · align: {align_friendly} · ID: {sid}"
+                matched_rows.append((label, sid))
+                break
+
+    # Fallback: list all sections if nothing matched
+    if not matched_rows:
+        for sid, sdata in seatmap.items():
+            rows = sdata.get("rows", {})
+            if not rows:
+                continue
+            align_code = sdata.get("align", "def")
+            align_friendly = {"l": "Left", "r": "Right", "def": "Centre (default)"}.get(align_code, align_code)
+            label = f"{sdata.get('section_name','(unnamed)')} · rows: {len(rows)} · align: {align_friendly} · ID: {sid}"
+            matched_rows.append((label, sid))
 
     if not matched_rows:
         st.warning("No section matches that row/seat.")
     else:
         display_labels = [lbl for lbl, _ in matched_rows]
-        label_choice = st.selectbox("Select section containing that seat:", display_labels)
+        label_choice = st.selectbox("Select section:", display_labels)
         section_id = dict(matched_rows)[label_choice]
 
         # Preview rows in this section
         rows_preview = []
         for r in seatmap[section_id]["rows"].values():
-            letters = r["row_index"]
+            letters = r.get("row_index", "")
             nums = [
-                int(s["number"][len(letters):])
-                for s in r["seats"].values()
-                if s["number"][len(letters):].isdigit()
+                int(s["number"][len(str(letters)):])
+                for s in r.get("seats", {}).values()
+                if isinstance(s.get("number", ""), str) and s["number"][len(str(letters)) :].isdigit()
             ]
             if nums:
                 rows_preview.append(f"{letters}{min(nums)}–{max(nums)}")
@@ -324,7 +340,7 @@ if uploaded_file:
 
         st.caption("Tip: Left / Right / Centre = seating alignment within the plan.")
 
-        # Optional relabel
+        # Optional: Relabel
         with st.expander("Optional: Relabel existing rows (e.g. add '(RV) ' prefix)"):
             available_rows = []
             for r in seatmap[section_id]["rows"].values():
@@ -429,7 +445,7 @@ if uploaded_file:
                 last = st.number_input("Last seat", 1, 999, 1, key=f"last_{i}")
 
             if letter:
-                # Build seat sequence as typed (no "reverse new rows" UI anymore)
+                # Build seat sequence as typed
                 if first <= last:
                     seat_numbers = list(range(first, last + 1))
                 else:
