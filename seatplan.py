@@ -10,7 +10,27 @@ import streamlit as st
 # =================================================
 
 # -------------------------------------------------
+# Natural sort helper for seat labels
+# -------------------------------------------------
+def _natural_seat_key(seat_label: str) -> tuple:
+    """Sort naturally: handles 'A1', 'A10', '1', '10', etc."""
+    s = str(seat_label)
+    # Letter(s) + digits, e.g. A12 / AA7
+    m = re.match(r"^([A-Za-z]+)(\d+)$", s)
+    if m:
+        row, num = m.group(1), int(m.group(2))
+        return (row.upper(), num, s)
+    # Digits only, e.g. '12'
+    m2 = re.match(r"^(\d+)$", s)
+    if m2:
+        return ("", int(m2.group(1)), s)
+    # Fallback: keep original string as last key
+    return (s.upper(), float("inf"), s)
+
+
+# -------------------------------------------------
 # Core helper – inserts rows keeping the user order
+# and applying A⇄Z rule when there's no anchor
 # -------------------------------------------------
 def insert_rows(
     seatmap: Dict,
@@ -22,11 +42,34 @@ def insert_rows(
     default_price: str = "85",
 ) -> Dict:
     section = seatmap[section_id]
-    rows_items = list(section["rows"].items())
+    rows_items = list(section.get("rows", {}).items())
 
+    # Decide order of the *added* rows.
+    # If there is no anchor (ref == "0") OR the anchor doesn't exist in the section,
+    # we sort by row index and:
+    #   - above  => Z→A
+    #   - below  => A→Z
+    ref_upper = str(ref_row_index).upper()
+    anchor_exists = any(
+        str(rdata.get("row_index", "")).upper() == ref_upper
+        for _, rdata in rows_items
+    )
+    empty_or_anchorless = (not rows_items) or (ref_upper == "0") or (not anchor_exists)
+
+    if empty_or_anchorless:
+        new_rows_sorted = sorted(
+            new_rows,
+            key=lambda x: str(x.get("index", "")).upper(),
+            reverse=(position == "above"),  # above => Z→A ; below => A→Z
+        )
+    else:
+        # When anchoring to an existing row, respect the user's input order
+        new_rows_sorted = new_rows
+
+    # Build rows to insert (in the decided order)
     ordered_pairs = []
-    for spec in new_rows:
-        row_letter = spec["index"].upper()
+    for spec in new_rows_sorted:
+        row_label = str(spec["index"]).upper()
         seat_labels = spec["labels"]
         row_id = f"r{uuid.uuid4().hex[:6]}"
         seats = {}
@@ -44,25 +87,26 @@ def insert_rows(
                 row_id,
                 {
                     "seats": seats,
-                    "row_index": row_letter,
+                    "row_index": row_label,
                     "row_price": default_price,
                     "row_id": row_id,
                 },
             )
         )
 
-    updated_rows = {}
+    updated_rows = OrderedDict()
     inserted = False
 
+    # Insert relative to the anchor if it exists
     for rid, rdata in rows_items:
-        if not inserted and (ref_row_index == "0" or rdata["row_index"].upper() == ref_row_index.upper()):
+        if not inserted and (ref_upper == "0" or str(rdata.get("row_index", "")).upper() == ref_upper):
             if position == "above":
                 for pid, pdata in ordered_pairs:
                     updated_rows[pid] = pdata
-                if ref_row_index != "0":
+                if ref_upper != "0":
                     updated_rows[rid] = rdata
             else:  # below
-                if ref_row_index != "0":
+                if ref_upper != "0":
                     updated_rows[rid] = rdata
                 for pid, pdata in ordered_pairs:
                     updated_rows[pid] = pdata
@@ -70,11 +114,14 @@ def insert_rows(
         else:
             updated_rows[rid] = rdata
 
+    # If no anchor was matched at all, prepend/append in the already-decided order
     if not inserted:
         if position == "above":
-            for pid, pdata in ordered_pairs:
-                updated_rows = {pid: pdata, **updated_rows}
+            # Prepend
+            prepend = OrderedDict((pid, pdata) for pid, pdata in ordered_pairs)
+            updated_rows = OrderedDict(list(prepend.items()) + list(updated_rows.items()))
         else:
+            # Append
             for pid, pdata in ordered_pairs:
                 updated_rows[pid] = pdata
 
@@ -100,7 +147,7 @@ def relabel_rows(
 
     new_seatmap = seatmap.copy()
     new_section = section.copy()
-    new_rows = {}
+    new_rows = OrderedDict()
     for rid, rdata in section["rows"].items():
         original_row = str(rdata.get("row_index", ""))
         if original_row.upper() in targets_upper:
@@ -149,14 +196,6 @@ def update_section_meta(
 # -------------------------------------------------
 # Direction helpers (operate on selected section)
 # -------------------------------------------------
-def _natural_seat_key(seat_label: str) -> tuple:
-    """Sort naturally: A1 < A2 < A10 (not A1, A10, A2)."""
-    m = re.match(r"^([A-Za-z]+)(\d+)$", str(seat_label))
-    if not m:
-        return (seat_label, 0, seat_label)
-    row, num = m.group(1), int(m.group(2))
-    return (row.upper(), num, seat_label)
-
 def reverse_section_rows_order(seatmap: Dict, *, section_id: str) -> Dict:
     """Reverse row order for the whole section."""
     section = seatmap.get(section_id)
@@ -173,6 +212,7 @@ def reverse_section_rows_order(seatmap: Dict, *, section_id: str) -> Dict:
     updated_section["rows"] = reversed_rows
     updated[section_id] = updated_section
     return updated
+
 
 def reverse_section_seat_order_selective(
     seatmap: Dict, *, section_id: str, rows_to_reverse: List[str]
@@ -246,8 +286,10 @@ st.title("🎭 Seat Plan Adaptions")
 
 uploaded_file = st.file_uploader("Upload your seatmap JSON", type="json")
 
+# NOTE: numbers are fine; '0' means "section start / no anchor"
 ref_row_letter = st.text_input(
-    "Reference row letter (e.g. 'B' – or '0' for section start)", value="A"
+    "Reference row label (e.g. 'B' or '10' — or '0' for section start)",
+    value="A"
 )
 ref_seat_number = st.text_input("Seat number in that row (e.g. '17')", value="1")
 
@@ -267,7 +309,9 @@ if uploaded_file:
     # Find candidate sections (forgiving + fallback)
     # --------------------------------------------
     matched_rows: List[Tuple[str, str]] = []
-    base_letters_match = re.search(r"([A-Za-z]+)", ref_row_letter or "")
+    ref_raw = (ref_row_letter or "").strip()
+    ref_full = ref_raw.upper()
+    base_letters_match = re.search(r"([A-Za-z]+)", ref_raw or "")
     base_letters = base_letters_match.group(1).upper() if base_letters_match else ""
 
     for sid, sdata in seatmap.items():
@@ -276,11 +320,19 @@ if uploaded_file:
             continue
         for rdata in rows.values():
             row_idx_raw = str(rdata.get("row_index", ""))
+            row_idx_full = row_idx_raw.upper()
             row_idx_letters_match = re.search(r"([A-Za-z]+)$", row_idx_raw)
-            row_idx_letters = row_idx_letters_match.group(1).upper() if row_idx_letters_match else row_idx_raw.upper()
+            row_idx_letters = row_idx_letters_match.group(1).upper() if row_idx_letters_match else ""
 
-            # Relaxed: match by row letters only; do NOT require an exact seat match
-            if ref_row_letter == "0" or (base_letters and row_idx_letters == base_letters):
+            # Match rules:
+            # - '0' => always match section
+            # - letters present in ref => match by letters
+            # - otherwise (digits-only ref) => exact full match
+            if (
+                ref_full == "0"
+                or (base_letters and row_idx_letters == base_letters)
+                or (ref_full and not base_letters and row_idx_full == ref_full)
+            ):
                 align_code = sdata.get("align", "def")
                 align_friendly = {"l": "Left", "r": "Right", "def": "Centre (default)"}.get(align_code, align_code)
                 label = f"{sdata.get('section_name','(unnamed)')} · rows: {len(rows)} · align: {align_friendly} · ID: {sid}"
@@ -312,7 +364,8 @@ if uploaded_file:
             nums = [
                 int(s["number"][len(str(letters)):])
                 for s in r.get("seats", {}).values()
-                if isinstance(s.get("number", ""), str) and s["number"][len(str(letters)) :].isdigit()
+                if isinstance(s.get("number", ""), str)
+                and s["number"][len(str(letters)) :].isdigit()
             ]
             if nums:
                 rows_preview.append(f"{letters}{min(nums)}–{max(nums)}")
@@ -438,7 +491,7 @@ if uploaded_file:
             st.markdown(f"### Row #{i+1}")
             col1, col2, col3 = st.columns([1, 1, 2])
             with col1:
-                letter = st.text_input(f"Row letter #{i+1}", key=f"row_letter_{i}")
+                letter = st.text_input(f"Row label #{i+1}", key=f"row_letter_{i}")
             with col2:
                 first = st.number_input("First seat", 1, 999, 1, key=f"first_{i}")
             with col3:
@@ -451,7 +504,7 @@ if uploaded_file:
                 else:
                     seat_numbers = list(range(first, last - 1, -1))
 
-                base_labels = [f"{letter.upper()}{n}" for n in seat_numbers]
+                base_labels = [f"{str(letter).upper()}{n}" for n in seat_numbers]
 
                 num_anomalies = st.number_input(
                     f"How many anomalies in Row #{i+1}?",
@@ -480,7 +533,7 @@ if uploaded_file:
                         insertion_index = seat_numbers.index(ano_between) + 1
                         base_labels.insert(insertion_index, ano_label)
 
-                new_rows.append({"index": letter.upper(), "labels": base_labels})
+                new_rows.append({"index": str(letter).upper(), "labels": base_labels})
 
         # -----------------------------
         # APPLY: update plan (rows + meta + direction + cleanup)
@@ -490,9 +543,9 @@ if uploaded_file:
                 try:
                     current = seatmap
 
-                    # 1) If adding rows, insert them first
+                    # 1) If adding rows, insert them first (with A/Z rule when no anchor)
+                    default_price = seatmap[section_id].get("price", seatmap[section_id].get("def_price", "85"))
                     if new_rows:
-                        default_price = seatmap[section_id].get("price", seatmap[section_id].get("def_price", "85"))
                         current = insert_rows(
                             current,
                             section_id=section_id,
