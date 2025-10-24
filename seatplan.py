@@ -99,7 +99,11 @@ def insert_rows(
 
     # Insert relative to the anchor if it exists
     for rid, rdata in rows_items:
-        if not inserted and (ref_upper == "0" or str(rdata.get("row_index", "")).upper() == ref_upper):
+        if (
+            not inserted
+            and (ref_upper == "0"
+                 or str(rdata.get("row_index", "")).upper() == ref_upper)
+        ):
             if position == "above":
                 for pid, pdata in ordered_pairs:
                     updated_rows[pid] = pdata
@@ -217,7 +221,10 @@ def reverse_section_rows_order(seatmap: Dict, *, section_id: str) -> Dict:
 def reverse_section_seat_order_selective(
     seatmap: Dict, *, section_id: str, rows_to_reverse: List[str]
 ) -> Dict:
-    """Reverse seat order only for specified row labels (labels themselves unchanged)."""
+    """
+    Reverse seat order only for specified row labels (labels themselves unchanged).
+    rows_to_reverse is a list of row_index strings, e.g. ["L","K"].
+    """
     if not rows_to_reverse:
         return seatmap
 
@@ -279,6 +286,40 @@ def delete_rows_with_exactly_one_seat(
     return updated, deleted
 
 
+# -------------------------------------------------
+# NEW: Delete specific rows by row_id (manual tick list)
+# -------------------------------------------------
+def delete_specific_rows(
+    seatmap: Dict, *, section_id: str, rows_to_delete: List[str]
+) -> Tuple[Dict, int]:
+    """
+    Delete rows whose row_id (rid key) appears in rows_to_delete.
+    rows_to_delete should be a list of internal row IDs, e.g. ['r4cbf53', 'r4102'].
+    Returns (updated_map, deleted_count).
+    """
+    if not rows_to_delete:
+        return seatmap, 0
+
+    section = seatmap.get(section_id)
+    if not section or "rows" not in section:
+        return seatmap, 0
+
+    updated = seatmap.copy()
+    updated_section = section.copy()
+    new_rows = OrderedDict()
+    deleted = 0
+
+    for rid, rdata in section["rows"].items():
+        if rid in rows_to_delete:
+            deleted += 1
+            continue
+        new_rows[rid] = rdata
+
+    updated_section["rows"] = new_rows
+    updated[section_id] = updated_section
+    return updated, deleted
+
+
 # =================================================
 # Streamlit UI
 # =================================================
@@ -299,8 +340,9 @@ seatmap = None
 # Defaults to avoid UnboundLocal errors
 do_reverse_rows = False
 do_reverse_seats_master = False
-rows_selected: List[str] = []
+rows_selected: List[str] = []  # rows to reverse seats for
 do_delete_lonely_first = False  # single-seat row deletion
+rows_marked_for_manual_delete: List[str] = []  # NEW: rows you tick to delete
 
 if uploaded_file:
     seatmap = json.load(uploaded_file)
@@ -334,8 +376,17 @@ if uploaded_file:
                 or (ref_full and not base_letters and row_idx_full == ref_full)
             ):
                 align_code = sdata.get("align", "def")
-                align_friendly = {"l": "Left", "r": "Right", "def": "Centre (default)"}.get(align_code, align_code)
-                label = f"{sdata.get('section_name','(unnamed)')} · rows: {len(rows)} · align: {align_friendly} · ID: {sid}"
+                align_friendly = {
+                    "l": "Left",
+                    "r": "Right",
+                    "def": "Centre (default)"
+                }.get(align_code, align_code)
+                label = (
+                    f"{sdata.get('section_name','(unnamed)')} · "
+                    f"rows: {len(rows)} · "
+                    f"align: {align_friendly} · "
+                    f"ID: {sid}"
+                )
                 matched_rows.append((label, sid))
                 break
 
@@ -346,8 +397,17 @@ if uploaded_file:
             if not rows:
                 continue
             align_code = sdata.get("align", "def")
-            align_friendly = {"l": "Left", "r": "Right", "def": "Centre (default)"}.get(align_code, align_code)
-            label = f"{sdata.get('section_name','(unnamed)')} · rows: {len(rows)} · align: {align_friendly} · ID: {sid}"
+            align_friendly = {
+                "l": "Left",
+                "r": "Right",
+                "def": "Centre (default)"
+            }.get(align_code, align_code)
+            label = (
+                f"{sdata.get('section_name','(unnamed)')} · "
+                f"rows: {len(rows)} · "
+                f"align: {align_friendly} · "
+                f"ID: {sid}"
+            )
             matched_rows.append((label, sid))
 
     if not matched_rows:
@@ -369,7 +429,10 @@ if uploaded_file:
             ]
             if nums:
                 rows_preview.append(f"{letters}{min(nums)}–{max(nums)}")
-        st.markdown("**Rows in this section:** " + (", ".join(rows_preview) or "(none)"))
+        st.markdown(
+            "**Rows in this section:** "
+            + (", ".join(rows_preview) or "(none)")
+        )
 
         # Section settings (name + align)
         st.subheader("Section settings")
@@ -384,14 +447,22 @@ if uploaded_file:
         with col_sn:
             edited_name = st.text_input("Section name", value=current_name)
         with col_al:
-            selected_index = align_options.index(current_align) if current_align in align_options else 2
+            selected_index = (
+                align_options.index(current_align)
+                if current_align in align_options
+                else 2
+            )
             display_choice = st.selectbox(
-                "Align", align_display, index=selected_index,
+                "Align",
+                align_display,
+                index=selected_index,
                 help="Where this section sits in the auditorium view."
             )
             edited_align = align_options[align_display.index(display_choice)]
 
-        st.caption("Tip: Left / Right / Centre = seating alignment within the plan.")
+        st.caption(
+            "Tip: Left / Right / Centre = seating alignment within the plan."
+        )
 
         # Optional: Relabel
         with st.expander("Optional: Relabel existing rows (e.g. add '(RV) ' prefix)"):
@@ -399,29 +470,40 @@ if uploaded_file:
             for r in seatmap[section_id]["rows"].values():
                 if "row_index" in r:
                     available_rows.append(str(r["row_index"]))
-            available_rows = sorted(dict.fromkeys(available_rows), key=lambda x: x.upper())
+            available_rows = sorted(
+                dict.fromkeys(available_rows), key=lambda x: x.upper()
+            )
 
             col_a, col_b = st.columns([2, 3])
             with col_a:
                 selected_rows = st.multiselect(
-                    "Rows to change", options=available_rows,
+                    "Rows to change",
+                    options=available_rows,
                     help="Pick one or more rows to relabel",
                 )
             with col_b:
                 new_prefix = st.text_input(
-                    "Prefix to add", value="(RV) ",
+                    "Prefix to add",
+                    value="(RV) ",
                     help="Applied to each selected row, e.g. '(RV) ' + T -> '(RV) T'",
                 )
 
             if selected_rows:
-                preview_samples = ", ".join([f"{new_prefix}{r}" for r in selected_rows[:3]])
-                st.caption(f"Preview: {preview_samples}{'…' if len(selected_rows) > 3 else ''}")
+                preview_samples = ", ".join(
+                    [f"{new_prefix}{r}" for r in selected_rows[:3]]
+                )
+                st.caption(
+                    f"Preview: {preview_samples}"
+                    f"{'…' if len(selected_rows) > 3 else ''}"
+                )
 
             if st.button("Apply relabel to selected rows"):
                 try:
                     seatmap = relabel_rows(
-                        seatmap, section_id=section_id,
-                        target_row_letters=selected_rows, new_prefix=new_prefix,
+                        seatmap,
+                        section_id=section_id,
+                        target_row_letters=selected_rows,
+                        new_prefix=new_prefix,
                     )
                     st.session_state["updated_map"] = seatmap
                     st.success(f"Relabelled {len(selected_rows)} row(s).")
@@ -431,52 +513,131 @@ if uploaded_file:
         # Direction options (apply on save)
         with st.expander("Fix direction for this section"):
             row_ids = list(seatmap[section_id]["rows"].keys())
-            row_labels = [seatmap[section_id]["rows"][rid].get("row_index", "") for rid in row_ids]
+            row_labels = [
+                seatmap[section_id]["rows"][rid].get("row_index", "")
+                for rid in row_ids
+            ]
             if row_labels:
-                st.caption(f"Current row order: {row_labels[0]} … {row_labels[-1]}")
+                st.caption(
+                    f"Current row order: {row_labels[0]} … {row_labels[-1]}"
+                )
 
             sample_row_id = row_ids[0] if row_ids else None
             if sample_row_id:
                 r = seatmap[section_id]["rows"][sample_row_id]
                 seat_labels = [s["number"] for s in r.get("seats", {}).values()]
-                seat_labels_sorted = sorted(seat_labels, key=_natural_seat_key)
+                seat_labels_sorted = sorted(
+                    seat_labels, key=_natural_seat_key
+                )
                 if seat_labels_sorted:
-                    st.caption(f"Sample seat direction (row {r.get('row_index','')}): {seat_labels_sorted[0]} … {seat_labels_sorted[-1]}")
+                    st.caption(
+                        f"Sample seat direction (row {r.get('row_index','')}): "
+                        f"{seat_labels_sorted[0]} … {seat_labels_sorted[-1]}"
+                    )
 
             col_dir1, col_dir2 = st.columns(2)
             with col_dir1:
                 do_reverse_rows = st.checkbox(
-                    "Reverse **row order** in this section", value=False,
+                    "Reverse **row order** in this section",
+                    value=False,
                     help="Flips top↔bottom (or near↔far) order of rows. Applied on save."
                 )
             with col_dir2:
                 do_reverse_seats_master = st.checkbox(
-                    "Reverse seat order **per row**", value=False,
+                    "Reverse seat order **per row**",
+                    value=False,
                     help="Flips left↔right order; choose rows below. Applied on save."
                 )
 
-            rows_in_section = [seatmap[section_id]["rows"][rid].get("row_index", "") for rid in row_ids]
+            rows_in_section = [
+                seatmap[section_id]["rows"][rid].get("row_index", "")
+                for rid in row_ids
+            ]
             rows_in_section = [str(x) for x in rows_in_section]
 
             rows_selected = []
             if do_reverse_seats_master and rows_in_section:
-                st.markdown("**Rows to reverse (untick any you *don’t* want changed):**")
+                st.markdown(
+                    "**Rows to reverse (untick any you *don’t* want changed):**"
+                )
                 cols = st.columns(4)
                 for i, row_label in enumerate(rows_in_section):
                     with cols[i % 4]:
-                        chk = st.checkbox(row_label, value=True, key=f"rev_row_{row_label}")
+                        chk = st.checkbox(
+                            row_label,
+                            value=True,
+                            key=f"rev_row_{row_label}"
+                        )
                         if chk:
                             rows_selected.append(row_label)
 
-            st.caption("Labels (e.g., A1, A2) are left unchanged; this fixes visual direction without renumbering.")
+            st.caption(
+                "Labels (e.g., A1, A2) are left unchanged; this fixes visual "
+                "direction without renumbering."
+            )
 
         # Cleanup options
         with st.expander("Cleanup options"):
+            # 1. Auto-delete: rows that only have one seat
             do_delete_lonely_first = st.checkbox(
                 "Delete any row that has exactly one seat",
                 value=False,
-                help="Ignores row letters and seat numbers; removes rows that contain only one seat."
+                help=(
+                    "Ignores row letters and seat numbers; removes rows that "
+                    "contain only one seat."
+                )
             )
+
+            st.markdown("---")
+
+            # 2. Manual delete: tick rows to drop
+            st.markdown(
+                "**Manually delete specific rows:**<br>"
+                "Tick any rows you added by accident or don't want to keep.",
+                unsafe_allow_html=True,
+            )
+
+            rows_marked_for_manual_delete = []
+            # We'll print each row with: visible label + row_id + seat range
+            if "rows" in seatmap[section_id]:
+                all_rows_items = list(seatmap[section_id]["rows"].items())
+
+                # Lay them out in columns so it's not a 2-mile list
+                del_cols = st.columns(2)
+
+                for i, (rid, rdata) in enumerate(all_rows_items):
+                    row_label = str(rdata.get("row_index", ""))
+                    seats_dict = rdata.get("seats", {})
+                    # Try to build a quick seat range like L25–L43
+                    seat_nums = []
+                    prefix = row_label
+                    for seat in seats_dict.values():
+                        lab = str(seat.get("number", ""))
+                        # extract the numeric tail after the row_label prefix
+                        if lab.upper().startswith(row_label.upper()):
+                            tail = lab[len(row_label):]
+                            if tail.isdigit():
+                                seat_nums.append(int(tail))
+                    seat_range_txt = ""
+                    if seat_nums:
+                        seat_range_txt = (
+                            f"{row_label}{min(seat_nums)}–"
+                            f"{row_label}{max(seat_nums)}"
+                        )
+
+                    with del_cols[i % 2]:
+                        del_chk = st.checkbox(
+                            f"{row_label} · row_id={rid}"
+                            + (f" ({seat_range_txt})" if seat_range_txt else ""),
+                            value=False,
+                            key=f"delrow_{rid}",
+                            help=(
+                                "Tick to remove this entire row from the plan. "
+                                "Useful if you added it by mistake."
+                            )
+                        )
+                        if del_chk:
+                            rows_marked_for_manual_delete.append(rid)
 
         # -----------------------------
         # Add rows  (NO reverse toggles here)
@@ -484,18 +645,35 @@ if uploaded_file:
         st.subheader("Add rows")
         position = st.radio("Insert rows", ["above", "below"], horizontal=True)
 
-        num_rows = st.number_input("How many new rows to add?", 1, 10, 1)
+        num_rows = st.number_input(
+            "How many new rows to add?", 1, 10, 1
+        )
 
         new_rows = []
         for i in range(int(num_rows)):
             st.markdown(f"### Row #{i+1}")
             col1, col2, col3 = st.columns([1, 1, 2])
             with col1:
-                letter = st.text_input(f"Row label #{i+1}", key=f"row_letter_{i}")
+                letter = st.text_input(
+                    f"Row label #{i+1}",
+                    key=f"row_letter_{i}"
+                )
             with col2:
-                first = st.number_input("First seat", 1, 999, 1, key=f"first_{i}")
+                first = st.number_input(
+                    "First seat",
+                    1,
+                    999,
+                    1,
+                    key=f"first_{i}"
+                )
             with col3:
-                last = st.number_input("Last seat", 1, 999, 1, key=f"last_{i}")
+                last = st.number_input(
+                    "Last seat",
+                    1,
+                    999,
+                    1,
+                    key=f"last_{i}"
+                )
 
             if letter:
                 # Build seat sequence as typed
@@ -504,11 +682,17 @@ if uploaded_file:
                 else:
                     seat_numbers = list(range(first, last - 1, -1))
 
-                base_labels = [f"{str(letter).upper()}{n}" for n in seat_numbers]
+                base_labels = [
+                    f"{str(letter).upper()}{n}"
+                    for n in seat_numbers
+                ]
 
                 num_anomalies = st.number_input(
                     f"How many anomalies in Row #{i+1}?",
-                    0, 5, 0, key=f"num_ano_{i}"
+                    0,
+                    5,
+                    0,
+                    key=f"num_ano_{i}"
                 )
                 anomalies = []
                 for j in range(num_anomalies):
@@ -528,23 +712,35 @@ if uploaded_file:
                     if ano_label:
                         anomalies.append((ano_between, ano_label))
 
-                for ano_between, ano_label in sorted(anomalies, key=lambda x: x[0], reverse=True):
+                for ano_between, ano_label in sorted(
+                    anomalies,
+                    key=lambda x: x[0],
+                    reverse=True
+                ):
                     if ano_between in seat_numbers:
-                        insertion_index = seat_numbers.index(ano_between) + 1
+                        insertion_index = seat_numbers.index(
+                            ano_between
+                        ) + 1
                         base_labels.insert(insertion_index, ano_label)
 
-                new_rows.append({"index": str(letter).upper(), "labels": base_labels})
+                new_rows.append(
+                    {"index": str(letter).upper(), "labels": base_labels}
+                )
 
         # -----------------------------
-        # APPLY: update plan (rows + meta + direction + cleanup)
+        # APPLY: update plan
+        # (rows + meta + direction + cleanup)
         # -----------------------------
         if uploaded_file and section_id:
             if st.button("💾 Update Plan"):
                 try:
                     current = seatmap
 
-                    # 1) If adding rows, insert them first (with A/Z rule when no anchor)
-                    default_price = seatmap[section_id].get("price", seatmap[section_id].get("def_price", "85"))
+                    # 1) If adding rows, insert them first
+                    default_price = seatmap[section_id].get(
+                        "price",
+                        seatmap[section_id].get("def_price", "85")
+                    )
                     if new_rows:
                         current = insert_rows(
                             current,
@@ -565,19 +761,42 @@ if uploaded_file:
 
                     # 3) Apply direction fixes (affects newly added rows too)
                     if do_reverse_rows:
-                        current = reverse_section_rows_order(current, section_id=section_id)
+                        current = reverse_section_rows_order(
+                            current, section_id=section_id
+                        )
                     if do_reverse_seats_master:
                         current = reverse_section_seat_order_selective(
-                            current, section_id=section_id,
+                            current,
+                            section_id=section_id,
                             rows_to_reverse=rows_selected or []
                         )
 
-                    # 4) Cleanup: delete any single-seat rows (label-agnostic)
+                    # 4a) Cleanup: delete any single-seat rows
                     if do_delete_lonely_first:
-                        current, deleted = delete_rows_with_exactly_one_seat(
-                            current, section_id=section_id
+                        current, deleted_auto = (
+                            delete_rows_with_exactly_one_seat(
+                                current,
+                                section_id=section_id
+                            )
                         )
-                        st.info(f"Cleanup removed {deleted} single-seat row(s).")
+                        if deleted_auto:
+                            st.info(
+                                f"Cleanup removed {deleted_auto} "
+                                f"single-seat row(s)."
+                            )
+
+                    # 4b) Cleanup: delete any rows you manually ticked
+                    if rows_marked_for_manual_delete:
+                        current, deleted_manual = delete_specific_rows(
+                            current,
+                            section_id=section_id,
+                            rows_to_delete=rows_marked_for_manual_delete
+                        )
+                        if deleted_manual:
+                            st.info(
+                                f"Removed {deleted_manual} "
+                                f"row(s) you ticked for deletion."
+                            )
 
                     st.session_state["updated_map"] = current
                     st.success("Plan updated – download below 👇")
@@ -589,4 +808,8 @@ if uploaded_file:
 # -----------------------------
 if "updated_map" in st.session_state:
     js = json.dumps(st.session_state["updated_map"], indent=2)
-    st.download_button("📥 Download updated JSON", js, "seatmap_updated.json")
+    st.download_button(
+        "📥 Download updated JSON",
+        js,
+        "seatmap_updated.json"
+    )
