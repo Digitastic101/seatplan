@@ -6,14 +6,14 @@ from typing import List, Dict, Tuple
 import streamlit as st
 
 # =================================================
-# 🎭 Seat Plan Adaptions (with row-order & blocked-seat fixes)
+# 🎭 Seat Plan Adaptions (top-down insert, blocked-seat enforcement, zero-based seats)
 # =================================================
 
 # -------------------------------------------------
 # Natural sort helper for seat labels
 # -------------------------------------------------
 def _natural_seat_key(seat_label: str) -> tuple:
-    """Sort naturally: handles 'A1', 'A10', '1', '10', etc."""
+    """Sort naturally: handles 'A1', 'A10', '1', '10', '0', etc."""
     s = str(seat_label)
     m = re.match(r"^([A-Za-z]+)(\d+)$", s)
     if m:
@@ -67,9 +67,7 @@ def mark_blocked_seats_uav(seatmap: Dict) -> Dict:
                 continue
             for seat_id, seat in seats.items():
                 if _seat_is_blocked(seat):
-                    # Force not available
-                    if seat.get("status", "").lower() != "uav":
-                        seat["status"] = "uav"
+                    seat["status"] = "uav"
     return updated
 
 # -------------------------------------------------
@@ -86,10 +84,12 @@ def insert_rows(
 ) -> Dict:
     """
     Insert new rows 'above' or 'below' a reference row.
-    FIX 1: When position == 'above', we ensure the inserted rows appear top-down (e.g. 4,3,2,1).
-            - If no anchor or missing anchor: we sort by index and reverse for 'above'.
-            - If anchoring to an existing row: we respect user input order for 'below', but
-              we REVERSE the input order for 'above' so the top-most row lands first.
+
+    FIX 1: When position == 'above', inserted rows appear top-down (e.g. 4,3,2,1).
+           - If no anchor or missing anchor: sort by row index and reverse for 'above'.
+           - If anchoring to an existing row: respect user order for 'below', but
+             REVERSE user order for 'above' so the top-most row lands first.
+
     FIX 2: Seats whose labels contain 'pillar' or 'not for sale' are created with status='uav'.
     """
     section = seatmap[section_id]
@@ -459,11 +459,8 @@ if uploaded_file:
                 and s["number"][len(str(letters)) :].isdigit()
             ]
             if nums:
-                rows_preview.append(f"{letters}{min(nums)}–{max(nums)}")
-        st.markdown(
-            "**Rows in this section:** "
-            + (", ".join(rows_preview) or "(none)")
-        )
+                rows_preview.append(f"{letters}{min(nums)}–{letters}{max(nums)}")
+        st.markdown("**Rows in this section:** " + (", ".join(rows_preview) or "(none)"))
 
         # Section settings (name + align)
         st.subheader("Section settings")
@@ -491,9 +488,7 @@ if uploaded_file:
             )
             edited_align = align_options[align_display.index(display_choice)]
 
-        st.caption(
-            "Tip: Left / Right / Centre = seating alignment within the plan."
-        )
+        st.caption("Tip: Left / Right / Centre = seating alignment within the plan.")
 
         # Optional: Relabel
         with st.expander("Optional: Relabel existing rows (e.g. add '(RV) ' prefix)"):
@@ -501,9 +496,7 @@ if uploaded_file:
             for r in seatmap[section_id]["rows"].values():
                 if "row_index" in r:
                     available_rows.append(str(r["row_index"]))
-            available_rows = sorted(
-                dict.fromkeys(available_rows), key=lambda x: x.upper()
-            )
+            available_rows = sorted(dict.fromkeys(available_rows), key=lambda x: x.upper())
 
             col_a, col_b = st.columns([2, 3])
             with col_a:
@@ -520,13 +513,8 @@ if uploaded_file:
                 )
 
             if selected_rows:
-                preview_samples = ", ".join(
-                    [f"{new_prefix}{r}" for r in selected_rows[:3]]
-                )
-                st.caption(
-                    f"Preview: {preview_samples}"
-                    f"{'…' if len(selected_rows) > 3 else ''}"
-                )
+                preview_samples = ", ".join([f"{new_prefix}{r}" for r in selected_rows[:3]])
+                st.caption(f"Preview: {preview_samples}{'…' if len(selected_rows) > 3 else ''}")
 
             if st.button("Apply relabel to selected rows"):
                 try:
@@ -544,22 +532,15 @@ if uploaded_file:
         # Direction options (apply on save)
         with st.expander("Fix direction for this section"):
             row_ids = list(seatmap[section_id]["rows"].keys())
-            row_labels = [
-                seatmap[section_id]["rows"][rid].get("row_index", "")
-                for rid in row_ids
-            ]
+            row_labels = [seatmap[section_id]["rows"][rid].get("row_index", "") for rid in row_ids]
             if row_labels:
-                st.caption(
-                    f"Current row order: {row_labels[0]} … {row_labels[-1]}"
-                )
+                st.caption(f"Current row order: {row_labels[0]} … {row_labels[-1]}")
 
             sample_row_id = row_ids[0] if row_ids else None
             if sample_row_id:
                 r = seatmap[section_id]["rows"][sample_row_id]
                 seat_labels = [s["number"] for s in r.get("seats", {}).values()]
-                seat_labels_sorted = sorted(
-                    seat_labels, key=_natural_seat_key
-                )
+                seat_labels_sorted = sorted(seat_labels, key=_natural_seat_key)
                 if seat_labels_sorted:
                     st.caption(
                         f"Sample seat direction (row {r.get('row_index','')}): "
@@ -580,32 +561,20 @@ if uploaded_file:
                     help="Flips left↔right order; choose rows below. Applied on save."
                 )
 
-            rows_in_section = [
-                seatmap[section_id]["rows"][rid].get("row_index", "")
-                for rid in row_ids
-            ]
+            rows_in_section = [seatmap[section_id]["rows"][rid].get("row_index", "") for rid in row_ids]
             rows_in_section = [str(x) for x in rows_in_section]
 
             rows_selected = []
             if do_reverse_seats_master and rows_in_section:
-                st.markdown(
-                    "**Rows to reverse (untick any you *don’t* want changed):**"
-                )
+                st.markdown("**Rows to reverse (untick any you *don’t* want changed):**")
                 cols = st.columns(4)
                 for i, row_label in enumerate(rows_in_section):
                     with cols[i % 4]:
-                        chk = st.checkbox(
-                            row_label,
-                            value=True,
-                            key=f"rev_row_{row_label}"
-                        )
+                        chk = st.checkbox(row_label, value=True, key=f"rev_row_{row_label}")
                         if chk:
                             rows_selected.append(row_label)
 
-            st.caption(
-                "Labels (e.g., A1, A2) are left unchanged; this fixes visual "
-                "direction without renumbering."
-            )
+            st.caption("Labels (e.g., A1, A2) are left unchanged; this fixes visual direction without renumbering.")
 
         # Cleanup options
         with st.expander("Cleanup options"):
@@ -613,10 +582,7 @@ if uploaded_file:
             do_delete_lonely_first = st.checkbox(
                 "Delete any row that has exactly one seat",
                 value=False,
-                help=(
-                    "Ignores row letters and seat numbers; removes rows that "
-                    "contain only one seat."
-                )
+                help=("Ignores row letters and seat numbers; removes rows that contain only one seat.")
             )
 
             st.markdown("---")
@@ -672,12 +638,12 @@ if uploaded_file:
             with col1:
                 letter = st.text_input(f"Row label #{i+1}", key=f"row_letter_{i}")
             with col2:
-                first = st.number_input("First seat", 1, 999, 1, key=f"first_{i}")
+                first = st.number_input("First seat", min_value=0, max_value=999, value=0, key=f"first_{i}")
             with col3:
-                last = st.number_input("Last seat", 1, 999, 1, key=f"last_{i}")
+                last = st.number_input("Last seat", min_value=0, max_value=999, value=1, key=f"last_{i}")
 
             if letter:
-                # Build seat sequence as typed
+                # Build seat sequence as typed (supports descending and 0 start)
                 if first <= last:
                     seat_numbers = list(range(first, last + 1))
                 else:
@@ -689,13 +655,20 @@ if uploaded_file:
                     f"How many anomalies in Row #{i+1}?", 0, 5, 0, key=f"num_ano_{i}"
                 )
                 anomalies = []
+
+                # Safe bounds for anomaly insertion even for single-seat ranges (e.g., 0–0)
+                ins_min = min(first, last)
+                ins_max = max(first, last) - 1
+                if ins_max < ins_min:
+                    ins_max = ins_min
+
                 for j in range(num_anomalies):
                     col_a1, col_a2 = st.columns([2, 3])
                     with col_a1:
                         ano_between = st.number_input(
                             f"Insert anomaly between... (#{j+1})",
-                            min_value=min(first, last),
-                            max_value=max(first, last) - 1,
+                            min_value=ins_min,
+                            max_value=ins_max,
                             key=f"ano_pos_{i}_{j}"
                         )
                     with col_a2:
@@ -707,6 +680,7 @@ if uploaded_file:
                         anomalies.append((ano_between, ano_label))
 
                 for ano_between, ano_label in sorted(anomalies, key=lambda x: x[0], reverse=True):
+                    # Insert after the chosen number
                     if ano_between in seat_numbers:
                         insertion_index = seat_numbers.index(ano_between) + 1
                         base_labels.insert(insertion_index, ano_label)
